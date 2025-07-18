@@ -411,13 +411,25 @@ class AgentTaskManager(InMemoryTaskManager):
 
     def _get_task_params(self, task_send_params: TaskSendParams) -> dict:
         """Extract common parameters from task metadata."""
-        metadata = task_send_params.message.metadata or {}
-        # Check for both agent_name and agentName in the metadata
-        agent_name = metadata.get("agent_name", metadata.get("agentName"))
+        message = task_send_params.message
+        # Use local variable for metadata to save attribute lookups.
+        metadata = getattr(message, "metadata", None)
+        if not metadata:
+            return {
+                "agent_name": None,
+                "streaming": True,
+                "session_id": task_send_params.sessionId,
+            }
+        # Minimize dictionary lookups.
+        agent_name = metadata.get("agent_name")
+        if agent_name is None:
+            agent_name = metadata.get("agentName")
+        streaming = metadata.get("streaming", True)
+        session_id = task_send_params.sessionId
         return {
             "agent_name": agent_name,
-            "streaming": metadata.get("streaming", True),
-            "session_id": task_send_params.sessionId,
+            "streaming": streaming,
+            "session_id": session_id,
         }
 
     async def _invoke(self, request: SendTaskRequest) -> SendTaskResponse:
