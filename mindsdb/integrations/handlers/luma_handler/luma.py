@@ -6,16 +6,21 @@ class LumaClient:
     def __init__(self, api_key):
         self.auth_token = api_key
         self.luma_base_endpoint = "https://api.lu.ma/"
+        self._headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "x-luma-api-key": api_key
+        }
         self.validate_api_key()
 
     def make_request(self, url, method='GET', payload=None):
-        if method not in ['GET', 'POST']:
+        # Only allow GET and POST methods
+        if method == 'GET':
+            resp = requests.get(url, headers=self._headers)
+        elif method == 'POST':
+            resp = requests.post(url, json=payload, headers=self._headers)
+        else:
             raise ValueError('Invalid HTTP request method')
-        headers = {"accept": "application/json", "content-type": "application/json"}
-        if self.auth_token:
-            headers['x-luma-api-key'] = self.auth_token
-        request_method = getattr(requests, method.lower())
-        resp = request_method(url, json=payload, headers=headers)
         return {"content": resp.json(), "code": resp.status_code}
 
     def validate_api_key(self):
@@ -36,6 +41,7 @@ class LumaClient:
         url = f'{self.luma_base_endpoint}public/v1/event/get?api_id={event_api_id}'
         content = self.make_request(url)
         if content['code'] != 200:
+            # Keep json.dumps for compatibility with error reporting
             raise Exception("Get event failed - " + json.dumps(content["content"]))
         return content
 
