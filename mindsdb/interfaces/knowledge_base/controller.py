@@ -159,9 +159,12 @@ class KnowledgeBaseTable:
         self.document_loader = None
         self.model_params = None
 
-        self.kb_to_vector_columns = {"id": "_original_doc_id", "chunk_id": "id", "chunk_content": "content"}
-        if self._kb.params.get("version", 0) < 2:
-            self.kb_to_vector_columns["id"] = "original_doc_id"
+        # Map KB column names to vector DB columns (optimized for __init__)
+        version = self._kb.params.get("version", 0)
+        if version < 2:
+            self.kb_to_vector_columns = {"id": "original_doc_id", "chunk_id": "id", "chunk_content": "content"}
+        else:
+            self.kb_to_vector_columns = {"id": "_original_doc_id", "chunk_id": "id", "chunk_content": "content"}
 
     def configure_preprocessing(self, config: Optional[dict] = None):
         """Configure preprocessing for the knowledge base table"""
@@ -855,18 +858,18 @@ class KnowledgeBaseTable:
 
     @staticmethod
     def call_litellm_embedding(session, model_params, messages):
-        args = copy.deepcopy(model_params)
+        # Fast shallow copy is sufficient because only primitives (model_name, provider) are popped
+        args = model_params.copy()
 
-        if "model_name" not in args:
+        model_name = args.pop("model_name", None)
+        if model_name is None:
             raise ValueError("'model_name' must be provided for embedding model")
-
-        llm_model = args.pop("model_name")
         engine = args.pop("provider")
 
         module = session.integration_controller.get_handler_module("litellm")
-        if module is None or module.Handler is None:
+        if not module or not getattr(module, "Handler", None):
             raise ValueError(f'Unable to use "{engine}" provider. Litellm handler is not installed')
-        return module.Handler.embeddings(engine, llm_model, messages, args)
+        return module.Handler.embeddings(engine, model_name, messages, args)
 
     def build_rag_pipeline(self, retrieval_config: dict):
         """
