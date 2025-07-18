@@ -24,16 +24,16 @@ def to_json(obj):
 
 
 def get_project_name(query: ASTNode = None):
-    project_name = None
-    if (
-        isinstance(query, Select)
-        and type(query.where) is BinaryOperation
-        and query.where.op == "="
-        and query.where.args[0].parts == ["project"]
-        and isinstance(query.where.args[1], Constant)
-    ):
-        project_name = query.where.args[1].value
-    return project_name
+    # Fast path: check types and op first before deep attribute access
+    if type(query) is Select:
+        where = query.where
+        if type(where) is BinaryOperation and where.op == "=":
+            left = where.args[0]
+            right = where.args[1]
+            # Check left exactly matches .parts == ["project"]
+            if getattr(left, "parts", None) == ["project"] and type(right) is Constant:
+                return right.value
+    return None
 
 
 class MdbTable(Table):
