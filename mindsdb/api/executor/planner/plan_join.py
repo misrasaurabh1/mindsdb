@@ -48,12 +48,15 @@ class PlanJoin:
 
     def is_timeseries(self, query):
         join = query.from_table
-        l_predictor = self.planner.get_predictor(join.left) if isinstance(join.left, Identifier) else None
-        r_predictor = self.planner.get_predictor(join.right) if isinstance(join.right, Identifier) else None
-        if l_predictor and l_predictor.get("timeseries"):
-            return True
-        if r_predictor and r_predictor.get("timeseries"):
-            return True
+        # Avoid redundant variable assignments, fetch predictors directly and short-circuit as early as possible
+        if isinstance(join.left, Identifier):
+            predictor = self.planner.get_predictor(join.left)
+            if predictor and predictor.get("timeseries"):
+                return True
+        if isinstance(join.right, Identifier):
+            predictor = self.planner.get_predictor(join.right)
+            if predictor and predictor.get("timeseries"):
+                return True
 
     def check_single_integration(self, query):
         query_info = self.planner.get_query_info(query)
