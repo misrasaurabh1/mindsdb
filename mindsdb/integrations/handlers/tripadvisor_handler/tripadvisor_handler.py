@@ -32,46 +32,34 @@ class TripAdvisorHandler(APIHandler):
 
     def __init__(self, name=None, **kwargs):
         super().__init__(name)
-
         args = kwargs.get("connection_data", {})
-        self._tables = {}
 
-        self.connection_args = {}
         handler_config = Config().get("tripadvisor_handler", {})
+        self.connection_args = {}
+        # Priority: explicit args > env var > handler config
         for k in ["api_key"]:
-            if k in args:
-                self.connection_args[k] = args[k]
-            elif f"TRIPADVISOR_{k.upper()}" in os.environ:
-                self.connection_args[k] = os.environ[f"TRIPADVISOR_{k.upper()}"]
-            elif k in handler_config:
-                self.connection_args[k] = handler_config[k]
+            v = args.get(k)
+            if v is None:
+                v = os.environ.get(f"TRIPADVISOR_{k.upper()}")
+                if v is None:
+                    v = handler_config.get(k)
+            if v is not None:
+                self.connection_args[k] = v
 
         self.api = None
         self.is_connected = False
 
-        tripAdvisor = SearchLocationTable(self)
-        self._register_table("searchLocationTable", tripAdvisor)
-
-        tripAdvisorLocationDetails = LocationDetailsTable(self)
-        self._register_table("locationDetailsTable", tripAdvisorLocationDetails)
-
-        tripAdvisorReviews = ReviewsTable(self)
-        self._register_table("reviewsTable", tripAdvisorReviews)
-
-        tripAdvisorPhotos = PhotosTable(self)
-        self._register_table("photosTable", tripAdvisorPhotos)
-
-        tripAdvisorNearbyLocation = NearbyLocationTable(self)
-        self._register_table("nearbyLocationTable", tripAdvisorNearbyLocation)
+        self._register_table("searchLocationTable", SearchLocationTable(self))
+        self._register_table("locationDetailsTable", LocationDetailsTable(self))
+        self._register_table("reviewsTable", ReviewsTable(self))
+        self._register_table("photosTable", PhotosTable(self))
+        self._register_table("nearbyLocationTable", NearbyLocationTable(self))
 
     def connect(self, api_version=2):
         """Check the connection with TripAdvisor API"""
-
-        if self.is_connected is True:
+        if self.is_connected:
             return self.api
-
         self.api = TripAdvisorAPI(api_key=self.connection_args["api_key"])
-
         self.is_connected = True
         return self.api
 
@@ -230,25 +218,27 @@ class TripAdvisorHandler(APIHandler):
         self, method_name: str = None, params: dict = None
     ) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
-        if self.is_connected is False:
+        if not self.is_connected:
             self.connect()
-
+        # Get all locations at once
         locations = self.api.getTripAdvisorData(TripAdvisorAPICall.PHOTOS, **params)
-        result = []
-
-        for loc in locations:
-            data = {
-                "id": loc.get("id"),
-                "is_blessed": loc.get("is_blessed"),
-                "album": loc.get("album"),
-                "caption": loc.get("caption"),
-                "published_date": loc.get("published_date"),
-                "images": str(loc.get("images")),
-                "source": str(loc.get("source")),
-                "user": str(loc.get("user")),
-            }
-            result.append(data)
-        result = pd.DataFrame(result)
+        # Fast path using list comprehension for direct vectorized data build
+        if locations:
+            result = pd.DataFrame({
+                "id":             [loc.get("id") for loc in locations],
+                "is_blessed":     [loc.get("is_blessed") for loc in locations],
+                "album":          [loc.get("album") for loc in locations],
+                "caption":        [loc.get("caption") for loc in locations],
+                "published_date": [loc.get("published_date") for loc in locations],
+                "images":         [str(loc.get("images")) for loc in locations],
+                "source":         [str(loc.get("source")) for loc in locations],
+                "user":           [str(loc.get("user")) for loc in locations],
+            })
+        else:
+            result = pd.DataFrame(columns=[
+                "id", "is_blessed", "album", "caption", "published_date",
+                "images", "source", "user"
+            ])
         return result
 
     def call_tripadvisor_nearby_location_api(
