@@ -159,6 +159,7 @@ class KnowledgeBaseTable:
         self.document_loader = None
         self.model_params = None
 
+        # assign map once in __init__
         self.kb_to_vector_columns = {"id": "_original_doc_id", "chunk_id": "id", "chunk_content": "content"}
         if self._kb.params.get("version", 0) < 2:
             self.kb_to_vector_columns["id"] = "original_doc_id"
@@ -413,11 +414,14 @@ class KnowledgeBaseTable:
         return df
 
     def addapt_conditions_columns(self, conditions):
-        if conditions is None:
+        if not conditions:
             return
+        kb_to_vector = self.kb_to_vector_columns
         for condition in conditions:
-            if condition.column in self.kb_to_vector_columns:
-                condition.column = self.kb_to_vector_columns[condition.column]
+            # eliminate attribute lookup, combine get & assign in one step
+            col_map = kb_to_vector.get(condition.column)
+            if col_map is not None:
+                condition.column = col_map
 
     def addapt_result_columns(self, df):
         col_update = {}
