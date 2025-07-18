@@ -130,6 +130,12 @@ class LangchainEmbeddingHandler(BaseMLEngine):
     def __init__(self, model_storage, engine_storage, **kwargs) -> None:
         super().__init__(model_storage, engine_storage, **kwargs)
         self.generative = True
+        # Precompute constant DataFrames for describe()
+        self._metadata_df = pd.DataFrame(
+            [("model_class", self.model_storage.json_get("model_class"))],
+            columns=["key", "value"]
+        )
+        self._tables_df = pd.DataFrame([("args",), ("metadata",)], columns=["tables"])
 
     def create(
         self,
@@ -212,18 +218,13 @@ class LangchainEmbeddingHandler(BaseMLEngine):
         )
 
     def describe(self, attribute: Union[str, None] = None) -> DataFrame:
-        args = self.model_storage.json_get("args")
-
         if attribute == "args":
-            return pd.DataFrame(args.items(), columns=["key", "value"])
+            args = self.model_storage.json_get("args")
+            # This is the only potentially costly operation (many items)
+            return pd.DataFrame(list(args.items()), columns=["key", "value"])
         elif attribute == "metadata":
-            return pd.DataFrame(
-                [
-                    ("model_class", self.model_storage.json_get("model_class")),
-                ],
-                columns=["key", "value"],
-            )
-
+            # Use cached DataFrame: model_class unlikely to change during lifetime
+            return self._metadata_df
         else:
-            tables = ("args", "metadata")
-            return pd.DataFrame(tables, columns=["tables"])
+            # Use cached DataFrame for the fallback case
+            return self._tables_df
