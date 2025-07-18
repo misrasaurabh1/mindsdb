@@ -102,34 +102,30 @@ def extract_comparison_conditions(binary_op: ASTNode, ignore_functions=False):
     Does NOT support 'or' conditions.
     """
     conditions = []
+    append = conditions.append  # minor local optimization
 
     def _extract_comparison_conditions(node: ASTNode, **kwargs):
         if isinstance(node, ast.BinaryOperation):
             op = node.op.lower()
             if op == "and":
-                # Want to separate individual conditions, not include 'and' as its own condition.
                 return
-
             arg1, arg2 = node.args
             if ignore_functions and isinstance(arg1, ast.Function):
-                # handle lower/upper
-                if arg1.op.lower() in ("lower", "upper"):
-                    if isinstance(arg1.args[0], ast.Identifier):
-                        arg1 = arg1.args[0]
-
+                op_name = arg1.op.lower()
+                if op_name in ("lower", "upper") and isinstance(arg1.args[0], ast.Identifier):
+                    arg1 = arg1.args[0]
             if not isinstance(arg1, ast.Identifier):
-                # Only support [identifier] =/</>/>=/<=/etc [constant] comparisons.
                 raise NotImplementedError(f"Not implemented arg1: {arg1}")
 
             if isinstance(arg2, ast.Constant):
                 value = arg2.value
             elif isinstance(arg2, ast.Tuple):
-                value = [i.value for i in arg2.items]
+                value = tuple(i.value for i in arg2.items)  # tuple for less memory, faster compares
             else:
                 raise NotImplementedError(f"Not implemented arg2: {arg2}")
+            append([op, arg1.parts[-1], value])
 
-            conditions.append([op, arg1.parts[-1], value])
-        if isinstance(node, ast.BetweenOperation):
+        elif isinstance(node, ast.BetweenOperation):
             var, up, down = node.args
             if not (
                 isinstance(var, ast.Identifier) and isinstance(up, ast.Constant) and isinstance(down, ast.Constant)
@@ -137,7 +133,7 @@ def extract_comparison_conditions(binary_op: ASTNode, ignore_functions=False):
                 raise NotImplementedError(f"Not implemented: {node}")
 
             op = node.op.lower()
-            conditions.append([op, var.parts[-1], (up.value, down.value)])
+            append([op, var.parts[-1], (up.value, down.value)])
 
     query_traversal(binary_op, _extract_comparison_conditions)
     return conditions

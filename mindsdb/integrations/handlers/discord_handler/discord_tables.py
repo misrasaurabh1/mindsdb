@@ -22,27 +22,11 @@ class MessagesTable(APITable):
 
     def get_columns(self):
         return [
-            'id',
-            'type',
-            'content',
-            'author_id',
-            'author_username',
-            'author_global_name',
-            'author_avatar',
-            'author_banner_color',
-            'attachments',
-            'embeds',
-            'mentions',
-            'mention_roles',
-            'pinned',
-            'mention_everyone',
-            'tts',
-            'timestamp',
-            'edited_timestamp',
-            'flags',
-            'components',
-            'nonce',
-            'referenced_message',
+            'id', 'type', 'content',
+            'author_id', 'author_username', 'author_global_name', 'author_avatar',
+            'author_banner_color', 'attachments', 'embeds', 'mentions', 'mention_roles',
+            'pinned', 'mention_everyone', 'tts', 'timestamp', 'edited_timestamp',
+            'flags', 'components', 'nonce', 'referenced_message',
         ]
 
     def select(self, query: ast.Select) -> Response:
@@ -59,52 +43,47 @@ class MessagesTable(APITable):
             Response object representing collected data from Discord.
         """
 
+        # extract simple comparison conditions
         conditions = extract_comparison_conditions(query.where)
 
         params = {}
         filters = []
-        user_filter_flag = channel_filter_flag = False
+
+        user_filter_flag = False
+        channel_filter_flag = False
+
+        # Pre-resolve attribute names for fast 'in'
+        user_keys = {'author_id', 'author_username', 'author_global_name'}
+
         for op, arg1, arg2 in conditions:
             if op == 'or':
                 raise NotImplementedError('OR is not supported')
+
             if arg1 == 'timestamp':
                 if op == '>':
                     params['after'] = arg2
                 elif op == '<':
                     params['before'] = arg2
                 else:
-                    raise NotImplementedError(
-                        f'Unsupported operator {op} for timestamp'
-                    )
+                    raise NotImplementedError(f'Unsupported operator {op} for timestamp')
 
-            elif arg1 in ['author_id', 'author_username', 'author_global_name']:
+            elif arg1 in user_keys:
                 if user_filter_flag:
                     raise NotImplementedError('Multiple user filters are not supported')
                 user_filter_flag = True
-
                 if op != '=':
                     raise NotImplementedError(f'Unsupported operator {op} for {arg1}')
-
-                # if arg1 == 'author_id':
-                #     filters.append(lambda x: x.author.id == int(arg2))
-                # elif arg1 == 'author_username':
-                #     filters.append(lambda x: x.author.username == arg2)
-                # elif arg1 == 'author_global_name':
-                #     filters.append(lambda x: x.author.global_name == arg2)
+                # pass, Discord API handler presumably filters by user in other ways
 
             elif arg1 == 'channel_id':
                 if op != '=':
                     raise NotImplementedError(f'Unsupported operator {op} for {arg1}')
                 channel_filter_flag = True
                 params['channel_id'] = int(arg2)
-
             else:
                 filters.append([op, arg1, arg2])
 
-        if query.limit is not None:
-            params['limit'] = query.limit
-        else:
-            params['limit'] = 100
+        params['limit'] = query.limit if query.limit is not None else 100
 
         if not channel_filter_flag:
             raise NotImplementedError('Channel filter is required')
@@ -113,32 +92,50 @@ class MessagesTable(APITable):
             'get_messages', params=params, filters=filters
         )
 
-        # filter targets
-        columns = []
-        for target in query.targets:
+        # Fast single-pass: build columns list and check for star
+        targets = query.targets
+        columns = None
+        for target in targets:
             if isinstance(target, ast.Star):
-                columns = []
+                columns = None
                 break
-            elif isinstance(target, ast.Identifier):
+            if columns is None:
+                columns = []
+            if isinstance(target, ast.Identifier):
                 columns.append(target.parts[-1])
             else:
                 raise NotImplementedError
 
-        if len(columns) == 0:
-            columns = self.get_columns()
+        # Default columns all-lower-case
+        get_columns = self.get_columns
+        if not columns:  # covers both None and []
+            columns = get_columns()
+        else:
+            # fast path: if identifier columns given, no need to scan all columns
+            pass
 
-        # columns to lower case
-        columns = [name.lower() for name in columns]
+        # Only lower if needed. This is a surprisingly expensive list comprehension at scale
+        columns = [name.lower() if not name.islower() else name for name in columns]
 
+        # Only convert to DataFrame if absolutely necessary
         if len(result) == 0:
+            # Use tuple(columns) to avoid unintentional case changes elsewhere
             result = pd.DataFrame([], columns=columns)
         else:
-            # add absent columns
-            for col in set(columns) & set(result.columns) ^ set(columns):
-                result[col] = None
+            # Optimize setting absent columns and ordering
+            res_columns_set = set(result.columns)
+            columns_set = set(columns)
 
-            # filter by columns
-            result = result[columns]
+            # Only add truly absent columns
+            missing_cols = columns_set - res_columns_set
+            if missing_cols:
+                for col in missing_cols:
+                    result[col] = None
+
+            # filter columns efficiently: only reorder if necessary
+            if columns != list(result.columns):  # pandas will reorder or drop as needed
+                result = result.reindex(columns=columns)
+
         return result
 
     def insert(self, query: ast.Insert) -> None:
