@@ -94,13 +94,14 @@ def get_exec_metadata_tool(llm, executor, model_kwargs) -> Callable:
 def get_mdb_write_tool(executor) -> Callable:
     def mdb_write_call(query: str) -> str:
         try:
-            query = query.strip('`')
-            ast_query = parse_sql(query.strip('`'))
+            # Remove leading and trailing backticks (faster, single strip call)
+            cleaned_query = query.strip('`')
+            ast_query = parse_sql(cleaned_query)
             if isinstance(ast_query, Insert):
-                _ = executor.execute_command(ast_query)
+                executor.execute_command(ast_query)
                 return "mindsdb write tool executed successfully"
         except Exception as e:
-            return f"mindsdb write tool failed with error:\n{str(e)}"
+            return f"mindsdb write tool failed with error:\n{e}"
     return mdb_write_call
 
 
