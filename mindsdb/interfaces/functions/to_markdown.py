@@ -86,27 +86,31 @@ class ToMarkdown:
         Converts an XML (or Nessus) file to markdown.
         """
 
-        def parse_element(element: ET.Element, depth: int = 0) -> str:
-            """
-            Recursively parses an XML element and converts it to markdown.
-            """
-            markdown = []
-            heading = "#" * (depth + 1)
+        # Read and decode XML in one go
+        root = ET.fromstring(file_content.read().decode("utf-8"))
 
-            markdown.append(f"{heading} {element.tag}")
+        markdown_lines = []
+        stack = [(root, 0)]
+
+        # Prebuild heading strings to avoid recomputing for each level
+        max_depth = 32  # reasonably large XML depth
+        headings = [("#" * (d + 1)) for d in range(max_depth)]
+
+        while stack:
+            element, depth = stack.pop()
+            heading = headings[depth] if depth < max_depth else ("#" * (depth + 1))
+            markdown_lines.append(f"{heading} {element.tag}")
 
             for key, val in element.attrib.items():
-                markdown.append(f"- **{key}**: {val}")
+                markdown_lines.append(f"- **{key}**: {val}")
 
             text = (element.text or "").strip()
             if text:
-                markdown.append(f"\n{text}\n")
+                markdown_lines.append(f"\n{text}\n")
 
-            for child in element:
-                markdown.append(parse_element(child, depth + 1))
+            # Traverse children in reverse for left-to-right order since pop() pops from end
+            if len(element):
+                for child in reversed(element):
+                    stack.append((child, depth + 1))
 
-            return "\n".join(markdown)
-
-        root = ET.fromstring(file_content.read().decode("utf-8"))
-        markdown_content = parse_element(root)
-        return markdown_content
+        return "\n".join(markdown_lines)
