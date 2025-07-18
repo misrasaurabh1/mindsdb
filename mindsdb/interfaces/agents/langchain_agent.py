@@ -29,7 +29,6 @@ from mindsdb.interfaces.agents.event_dispatch_callback_handler import (
     EventDispatchCallbackHandler,
 )
 from mindsdb.interfaces.agents.constants import AGENT_CHUNK_POLLING_INTERVAL_SECONDS
-from mindsdb.utilities import log
 from mindsdb.utilities.context_executor import ContextThreadPoolExecutor
 from mindsdb.interfaces.storage import db
 from mindsdb.utilities.context import context as ctx
@@ -67,13 +66,14 @@ from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 
 from mindsdb.utilities.langfuse import LangfuseClientWrapper
+import logging
 
 _PARSING_ERROR_PREFIXES = [
     "An output parsing error occurred",
     "Could not parse LLM output",
 ]
 
-logger = log.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def get_llm_provider(args: Dict) -> str:
@@ -105,11 +105,13 @@ def get_embedding_model_provider(args: Dict) -> str:
 
     For VLLM, this will use our custom VLLMEmbeddings class from langchain_embedding_handler.
     """
-    # Check for explicit embedding model provider
-    if "embedding_model_provider" in args:
-        provider = args["embedding_model_provider"]
+    # Fast-path: explicit provider specified
+    provider = args.get("embedding_model_provider")
+    if provider is not None:
         if provider == "vllm":
-            if not (args.get("openai_api_base") and args.get("model")):
+            openai_base = args.get("openai_api_base")
+            model = args.get("model")
+            if not (openai_base and model):
                 raise ValueError(
                     "VLLM embeddings configuration error:\n"
                     "- Missing required parameters: 'openai_api_base' and/or 'model'\n"
@@ -119,10 +121,12 @@ def get_embedding_model_provider(args: Dict) -> str:
             return "vllm"
         return provider
 
-    # Check if LLM provider is vLLM
+    # Fallback: check LLM provider
     llm_provider = args.get("provider", DEFAULT_EMBEDDINGS_MODEL_PROVIDER)
     if llm_provider == "vllm":
-        if not (args.get("openai_api_base") and args.get("model")):
+        openai_base = args.get("openai_api_base")
+        model = args.get("model")
+        if not (openai_base and model):
             raise ValueError(
                 "VLLM embeddings configuration error:\n"
                 "- Missing required parameters: 'openai_api_base' and/or 'model'\n"
@@ -246,6 +250,19 @@ class LangchainAgent:
         # Back compatibility for old models
         self.provider = self.args.get("provider", get_llm_provider(self.args))
 
+        # memoize expensive properties for this agent instance
+        self._skills_cache = None
+        self._embedding_model_provider_cache = None
+
+        # Memoize user/context data, which we expect remains constant for this session
+        self._ctx_data = {
+            "user_id": ctx.user_id,
+            "session_id": ctx.session_id,
+            "company_id": ctx.company_id,
+            "user_class": ctx.user_class,
+            "email_confirmed": ctx.email_confirmed,
+        }
+
     def _initialize_args(self, llm_params: dict = None) -> dict:
         """
         Initialize the arguments for agent execution.
@@ -302,19 +319,22 @@ class LangchainAgent:
         return args
 
     def get_metadata(self) -> Dict:
-        return {
+        # Memoize skills per agent for efficiency in repeated calls
+        if self._skills_cache is None:
+            self._skills_cache = get_skills(self.agent)
+        # Memoize embedding model provider for efficiency
+        if self._embedding_model_provider_cache is None:
+            self._embedding_model_provider_cache = self.args.get(
+                "embedding_model_provider", get_embedding_model_provider(self.args)
+            )
+        meta = {
             "provider": self.provider,
             "model_name": self.args["model_name"],
-            "embedding_model_provider": self.args.get(
-                "embedding_model_provider", get_embedding_model_provider(self.args)
-            ),
-            "skills": get_skills(self.agent),
-            "user_id": ctx.user_id,
-            "session_id": ctx.session_id,
-            "company_id": ctx.company_id,
-            "user_class": ctx.user_class,
-            "email_confirmed": ctx.email_confirmed,
+            "embedding_model_provider": self._embedding_model_provider_cache,
+            "skills": self._skills_cache,
         }
+        meta.update(self._ctx_data)
+        return meta
 
     def get_tags(self) -> List:
         return [
