@@ -65,24 +65,28 @@ def convert_join_to_list(join):
     if isinstance(join.right, ast.Join):
         raise NotImplementedError('Wrong join AST')
 
-    items = []
+    # Fast path: left is not a Join, so no recursive call
+    if not isinstance(join.left, ast.Join):
+        # Construct both dicts up front and return the list at once
+        return [
+            {'table': join.left},
+            {
+                'table': join.right,
+                'join_type': join.join_type,
+                'is_implicit': join.implicit,
+                'condition': join.condition
+            }
+        ]
+    # Slow path: left is a join, recurse just once
+    items = convert_join_to_list(join.left)
 
-    if isinstance(join.left, ast.Join):
-        # dive to next level
-        items.extend(convert_join_to_list(join.left))
-    else:
-        # this is first table
-        items.append(dict(
-            table=join.left
-        ))
-
-    # all properties set to right table
-    items.append(dict(
-        table=join.right,
-        join_type=join.join_type,
-        is_implicit=join.implicit,
-        condition=join.condition
-    ))
+    # Append right-side table directly to avoid extra copy or extend
+    items.append({
+        'table': join.right,
+        'join_type': join.join_type,
+        'is_implicit': join.implicit,
+        'condition': join.condition
+    })
 
     return items
 
