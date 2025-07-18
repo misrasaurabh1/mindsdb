@@ -183,21 +183,37 @@ def create_chat_model(args: Dict):
 
 
 def prepare_prompts(df, base_template, input_variables, user_column=USER_COLUMN):
+    # Find indices where all input_variables are NA
     empty_prompt_ids = np.where(df[input_variables].isna().all(axis=1).values)[0]
+    empty_ids_set = set(empty_prompt_ids)
 
-    # Combine system prompt with user-provided template
-    base_template = f"{DEFAULT_AGENT_SYSTEM_PROMPT}\n\n{base_template}"
+    # Combine system prompt with user-provided template and fix curly braces
+    full_template = f"{DEFAULT_AGENT_SYSTEM_PROMPT}\n\n{base_template}"
+    full_template = full_template.replace("{{", "{").replace("}}", "}")
 
-    base_template = base_template.replace("{{", "{").replace("}}", "}")
+    # Instantiate PromptTemplate only once
+    prompt_template = PromptTemplate(input_variables=input_variables, template=full_template)
+
+    get_idx = df.index.get_indexer
+
+    # For fast column access, extract numpy arrays for all input_variables
+    # Also get user_column as numpy array if present
+    col_arrays = {col: df[col].values for col in input_variables}
+    user_col_array = df[user_column].values if user_column in df else None
+
     prompts = []
 
-    for i, row in df.iterrows():
-        if i not in empty_prompt_ids:
-            prompt = PromptTemplate(input_variables=input_variables, template=base_template)
-            kwargs = {col: row[col] if row[col] is not None else "" for col in input_variables}
-            prompts.append(prompt.format(**kwargs))
-        elif row.get(user_column):
-            prompts.append(row[user_column])
+    for idx, *row_values in zip(df.index, *[col_arrays[col] for col in input_variables]):
+        # Check if empty_prompt_ids set contains this index (fast O(1))
+        if idx not in empty_ids_set:
+            # Build kwargs dict for input_variables (avoid None -> "")
+            kwargs = {col: (val if val is not None else "") for col, val in zip(input_variables, row_values)}
+            prompts.append(prompt_template.format(**kwargs))
+        elif user_col_array is not None:
+            # Both row_values and user_col_array are aligned by order as df.values
+            user_value = user_col_array[get_idx([idx])[0]]
+            if user_value:  # Only add if user_value is not NA/None/empty
+                prompts.append(user_value)
 
     return prompts, empty_prompt_ids
 
