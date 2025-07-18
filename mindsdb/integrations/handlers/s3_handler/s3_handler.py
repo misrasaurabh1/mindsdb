@@ -93,9 +93,11 @@ class S3Handler(APIHandler):
         self.kwargs = kwargs
 
         self.connection = None
+        self._generate_presigned_url = None  # Cached method reference for faster access
         self.is_connected = False
         self.thread_safe = True
-        self.bucket = self.connection_data.get("bucket")
+        bucket = connection_data.get("bucket")
+        self.bucket = bucket if bucket is not None else None
         self._regions = {}
 
         self._files_table = ListFilesTable(self)
@@ -114,16 +116,18 @@ class S3Handler(APIHandler):
         Returns:
             boto3.client: A client object to the AWS (S3) account.
         """
-        if self.is_connected is True:
+        if self.is_connected:
             return self.connection
 
         # Validate mandatory parameters.
-        if not all(key in self.connection_data for key in ["aws_access_key_id", "aws_secret_access_key"]):
+        conn_data = self.connection_data
+        if not (conn_data and "aws_access_key_id" in conn_data and "aws_secret_access_key" in conn_data):
             raise ValueError("Required parameters (aws_access_key_id, aws_secret_access_key) must be provided.")
 
         # Connect to S3 and configure mandatory credentials.
         self.connection = self._connect_boto3()
         self.is_connected = True
+        self._generate_presigned_url = self.connection.generate_presigned_url
 
         return self.connection
 
@@ -397,9 +401,10 @@ class S3Handler(APIHandler):
         Returns:
             str: The pre-signed URL for accessing the object.
         """
-        client = self.connect()
-        url = client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)
-        return url
+        # Use cached method reference for slightly quicker SAS generation
+        if not self.is_connected or self._generate_presigned_url is None:
+            self.connect()
+        return self._generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)
 
     def get_tables(self) -> Response:
         """
