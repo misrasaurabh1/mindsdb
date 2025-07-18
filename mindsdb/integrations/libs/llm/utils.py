@@ -58,43 +58,43 @@ def get_completed_prompts(base_template: str, df: pd.DataFrame, strict=True) -> 
 
     :return prompts: list of in-filled prompts using `base_template` and relevant columns from `df`
     :return empty_prompt_ids: np.int numpy array (shape (n_missing_rows,)) with the row indexes where in-fill failed due to missing data.
-    """  # noqa
-    columns = []
-    spans = []
-    matches = list(re.finditer("{{(.*?)}}", base_template))
-
-    if len(matches) == 0:
+    """
+    # Use re.findall for fast extraction, vectorize where possible
+    matches = list(re.finditer(r"{{(.*?)}}", base_template))
+    if not matches:
         # no placeholders
         if strict:
             raise AssertionError("No placeholders found in the prompt, please provide a valid prompt template.")
         prompts = [base_template] * len(df)
-        return prompts, np.ndarray(0)
+        return prompts, np.empty(0, dtype=int)
 
-    first_span = matches[0].start()
-    last_span = matches[-1].end()
+    columns = [m.group(1).strip() for m in matches]
 
-    for m in matches:
-        columns.append(m[0].replace("{", "").replace("}", ""))
-        spans.extend((m.start(), m.end()))
+    # Fast check for missing columns
+    for col in columns:
+        if col not in df.columns:
+            raise KeyError(f"Column '{col}' in template is missing from input DataFrame.")
 
-    spans = spans[1:-1]  # omit first and last, they are added separately
-    template = [
-        base_template[s:e] for s, e in list(zip(spans, spans[1:]))[::2]
-    ]  # take every other to skip placeholders  # noqa
-    template.insert(0, base_template[0:first_span])  # add prompt start
-    template.append(base_template[last_span:])  # add prompt end
+    # Create a 2D ndarray of the substitute values (all strings, no None)
+    value_arrays = []
+    for col in columns:
+        values = df[col].replace(to_replace=[None], value="").astype(str).values
+        value_arrays.append(values)
+    # shape: (num_placeholders, num_rows)
+    stack = np.vstack(value_arrays)
 
-    empty_prompt_ids = np.where(df[columns].isna().all(axis=1).values)[0]
+    # Identify rows where all placeholders are missing/empty (for empty_prompt_ids)
+    # Ensures .isna().all(axis=1) compatibility with string conversion
+    mask = np.full(stack.shape, False)
+    for i, col in enumerate(columns):
+        mask[i] = df[col].isna().values | (stack[i] == "")
+    empty_prompt_ids = np.where(mask.all(axis=0))[0]
 
-    df["__mdb_prompt"] = ""
-    for i in range(len(template)):
-        atom = template[i]
-        if i < len(columns):
-            col = df[columns[i]].replace(to_replace=[None], value="")  # add empty quote if data is missing
-            df["__mdb_prompt"] = df["__mdb_prompt"].apply(lambda x: x + atom) + col.astype("string")
-        else:
-            df["__mdb_prompt"] = df["__mdb_prompt"].apply(lambda x: x + atom)
-    prompts = list(df["__mdb_prompt"])
+    # Build a single regex using sub
+    # Build a format string: re.sub("{{(.*?)}}", "{}") to take advantage of .format(*).
+    format_string = re.sub(r"{{(.*?)}}", "{}", base_template)
+    # Now vectorized formatting, much faster than per-row apply/loop
+    prompts = [format_string.format(*row) for row in stack.T]
 
     return prompts, empty_prompt_ids
 
