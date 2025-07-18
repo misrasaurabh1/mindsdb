@@ -32,46 +32,41 @@ class TripAdvisorHandler(APIHandler):
 
     def __init__(self, name=None, **kwargs):
         super().__init__(name)
-
         args = kwargs.get("connection_data", {})
-        self._tables = {}
+
+        # Only fetch config/env once
+        handler_config = Config().get("tripadvisor_handler", {})
+        env = os.environ
 
         self.connection_args = {}
-        handler_config = Config().get("tripadvisor_handler", {})
-        for k in ["api_key"]:
-            if k in args:
-                self.connection_args[k] = args[k]
-            elif f"TRIPADVISOR_{k.upper()}" in os.environ:
-                self.connection_args[k] = os.environ[f"TRIPADVISOR_{k.upper()}"]
-            elif k in handler_config:
-                self.connection_args[k] = handler_config[k]
+        for k in ("api_key",):
+            v = args.get(k)
+            if v is not None:
+                self.connection_args[k] = v
+            else:
+                env_k = f'TRIPADVISOR_{k.upper()}'
+                if env_k in env:
+                    self.connection_args[k] = env[env_k]
+                else:
+                    v = handler_config.get(k)
+                    if v is not None:
+                        self.connection_args[k] = v
 
         self.api = None
         self.is_connected = False
 
-        tripAdvisor = SearchLocationTable(self)
-        self._register_table("searchLocationTable", tripAdvisor)
-
-        tripAdvisorLocationDetails = LocationDetailsTable(self)
-        self._register_table("locationDetailsTable", tripAdvisorLocationDetails)
-
-        tripAdvisorReviews = ReviewsTable(self)
-        self._register_table("reviewsTable", tripAdvisorReviews)
-
-        tripAdvisorPhotos = PhotosTable(self)
-        self._register_table("photosTable", tripAdvisorPhotos)
-
-        tripAdvisorNearbyLocation = NearbyLocationTable(self)
-        self._register_table("nearbyLocationTable", tripAdvisorNearbyLocation)
+        # Register tables
+        self._register_table("searchLocationTable", SearchLocationTable(self))
+        self._register_table("locationDetailsTable", LocationDetailsTable(self))
+        self._register_table("reviewsTable", ReviewsTable(self))
+        self._register_table("photosTable", PhotosTable(self))
+        self._register_table("nearbyLocationTable", NearbyLocationTable(self))
 
     def connect(self, api_version=2):
         """Check the connection with TripAdvisor API"""
-
-        if self.is_connected is True:
+        if self.is_connected:
             return self.api
-
         self.api = TripAdvisorAPI(api_key=self.connection_args["api_key"])
-
         self.is_connected = True
         return self.api
 
@@ -197,14 +192,21 @@ class TripAdvisorHandler(APIHandler):
         self, method_name: str = None, params: dict = None
     ) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
-        if self.is_connected is False:
+        if not self.is_connected:
             self.connect()
-
+        # Bulk extract and flatten (pandas faster from list-of-dicts)
         locations = self.api.getTripAdvisorData(TripAdvisorAPICall.REVIEWS, **params)
-        result = []
-
+        if not locations:
+            return pd.DataFrame()
+        # Build DataFrame in one go, vectorized over the source structure
+        columns = [
+            "id", "lang", "location_id", "published_date", "rating", "helpful_votes",
+            "rating_image_url", "url", "trip_type", "travel_date", "text_review",
+            "title", "owner_response", "is_machine_translated", "user", "subratings"
+        ]
+        records = []
         for loc in locations:
-            data = {
+            rec = {
                 "id": loc.get("id"),
                 "lang": loc.get("lang"),
                 "location_id": loc.get("location_id"),
@@ -222,9 +224,8 @@ class TripAdvisorHandler(APIHandler):
                 "user": str(loc.get("user")),
                 "subratings": str(loc.get("subratings")),
             }
-            result.append(data)
-        result = pd.DataFrame(result)
-        return result
+            records.append(rec)
+        return pd.DataFrame(records, columns=columns)
 
     def call_tripadvisor_photos_api(
         self, method_name: str = None, params: dict = None
