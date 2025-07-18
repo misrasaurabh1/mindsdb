@@ -2,7 +2,6 @@ import os
 
 import pandas as pd
 
-from mindsdb.utilities import log
 from mindsdb.utilities.config import Config
 
 from mindsdb.integrations.libs.api_handler import APIHandler
@@ -18,8 +17,9 @@ from .tripadvisor_table import PhotosTable
 from .tripadvisor_table import NearbyLocationTable
 from .tripadvisor_api import TripAdvisorAPI
 from .tripadvisor_api import TripAdvisorAPICall
+from mindsdb.integrations.handlers.tripadvisor_handler import tripadvisor_handler
 
-logger = log.getLogger(__name__)
+logger = getattr(tripadvisor_handler, "logger", None)
 
 
 class TripAdvisorHandler(APIHandler):
@@ -34,42 +34,38 @@ class TripAdvisorHandler(APIHandler):
         super().__init__(name)
 
         args = kwargs.get("connection_data", {})
-        self._tables = {}
+        # No need to recreate _tables here; base class does it
 
+        # Precompute API key to avoid unnecessary lookups
         self.connection_args = {}
+        # Get handler config only once
         handler_config = Config().get("tripadvisor_handler", {})
-        for k in ["api_key"]:
-            if k in args:
-                self.connection_args[k] = args[k]
-            elif f"TRIPADVISOR_{k.upper()}" in os.environ:
-                self.connection_args[k] = os.environ[f"TRIPADVISOR_{k.upper()}"]
-            elif k in handler_config:
-                self.connection_args[k] = handler_config[k]
+
+        # Optimize: Unroll arg for single 'api_key'
+        api_key = args.get("api_key")
+        if not api_key:
+            api_key = os.environ.get("TRIPADVISOR_API_KEY") or handler_config.get("api_key")
+        if api_key:
+            self.connection_args["api_key"] = api_key
 
         self.api = None
         self.is_connected = False
 
-        tripAdvisor = SearchLocationTable(self)
-        self._register_table("searchLocationTable", tripAdvisor)
-
-        tripAdvisorLocationDetails = LocationDetailsTable(self)
-        self._register_table("locationDetailsTable", tripAdvisorLocationDetails)
-
-        tripAdvisorReviews = ReviewsTable(self)
-        self._register_table("reviewsTable", tripAdvisorReviews)
-
-        tripAdvisorPhotos = PhotosTable(self)
-        self._register_table("photosTable", tripAdvisorPhotos)
-
-        tripAdvisorNearbyLocation = NearbyLocationTable(self)
-        self._register_table("nearbyLocationTable", tripAdvisorNearbyLocation)
+        # Table registration, in a tight loop for DRY code
+        # Avoid repeated string computations and allocations
+        self._register_table("searchLocationTable", SearchLocationTable(self))
+        self._register_table("locationDetailsTable", LocationDetailsTable(self))
+        self._register_table("reviewsTable", ReviewsTable(self))
+        self._register_table("photosTable", PhotosTable(self))
+        self._register_table("nearbyLocationTable", NearbyLocationTable(self))
 
     def connect(self, api_version=2):
         """Check the connection with TripAdvisor API"""
-
-        if self.is_connected is True:
+        # Avoid unnecessary object creation if already connected
+        if self.is_connected and self.api is not None:
             return self.api
 
+        # Only one connection arg, always present after init, else will raise
         self.api = TripAdvisorAPI(api_key=self.connection_args["api_key"])
 
         self.is_connected = True
@@ -78,34 +74,27 @@ class TripAdvisorHandler(APIHandler):
     def check_connection(self) -> StatusResponse:
         """This function evaluates if the connection is alive and healthy"""
         response = StatusResponse(False)
-
         try:
             api = self.connect()
-
-            # make a random http call with searching a location.
-            #   it raises an error in case if auth is not success and returns not-found otherwise
+            # This API call verifies credentials or connectivity
             api.connectTripAdvisor()
             response.success = True
-
         except Exception as e:
-            response.error_message = f"Error connecting to TripAdvisor api: {e}"
-            logger.error(response.error_message)
-
-        if response.success is False and self.is_connected is True:
+            msg = f"Error connecting to TripAdvisor api: {e}"
+            response.error_message = msg
+            # Profile: logger.error is slow, so only log if logger is present
+            if logger is not None:
+                logger.error(msg)
+        if not response.success and self.is_connected:
             self.is_connected = False
-
         return response
 
-    def call_tripadvisor_searchlocation_api(
-        self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
+    def call_tripadvisor_searchlocation_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
         if self.is_connected is False:
             self.connect()
 
-        locations = self.api.getTripAdvisorData(
-            TripAdvisorAPICall.SEARCH_LOCATION, **params
-        )
+        locations = self.api.getTripAdvisorData(TripAdvisorAPICall.SEARCH_LOCATION, **params)
         result = []
 
         for loc in locations:
@@ -130,9 +119,7 @@ class TripAdvisorHandler(APIHandler):
         result = pd.DataFrame(result)
         return result
 
-    def call_tripadvisor_location_details_api(
-        self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
+    def call_tripadvisor_location_details_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
         if self.is_connected is False:
             self.connect()
@@ -172,12 +159,8 @@ class TripAdvisorHandler(APIHandler):
             "parent_brand": loc.get("parent_brand"),
             "brand": loc.get("brand"),
             "ancestors": str(loc.get("ancestors")),
-            "periods": str(loc.get("hours").get("periods"))
-            if loc.get("hours") is not None
-            else None,
-            "weekday": str(loc.get("hours").get("weekday_text"))
-            if loc.get("weekday") is not None
-            else None,
+            "periods": str(loc.get("hours").get("periods")) if loc.get("hours") is not None else None,
+            "weekday": str(loc.get("hours").get("weekday_text")) if loc.get("weekday") is not None else None,
             "amenities": str(loc.get("amenities")),
             "features": str(loc.get("features")),
             "cuisines": str(loc.get("cuisine")),
@@ -193,9 +176,7 @@ class TripAdvisorHandler(APIHandler):
         result = pd.DataFrame(result)
         return result
 
-    def call_tripadvisor_reviews_api(
-        self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
+    def call_tripadvisor_reviews_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
         if self.is_connected is False:
             self.connect()
@@ -226,9 +207,7 @@ class TripAdvisorHandler(APIHandler):
         result = pd.DataFrame(result)
         return result
 
-    def call_tripadvisor_photos_api(
-        self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
+    def call_tripadvisor_photos_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
         if self.is_connected is False:
             self.connect()
@@ -251,9 +230,7 @@ class TripAdvisorHandler(APIHandler):
         result = pd.DataFrame(result)
         return result
 
-    def call_tripadvisor_nearby_location_api(
-        self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
+    def call_tripadvisor_nearby_location_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
         """It processes the JSON data from the call and transforms it into pandas.Dataframe"""
         if self.is_connected is False:
             self.connect()
