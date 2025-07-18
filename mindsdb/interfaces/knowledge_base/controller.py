@@ -1159,16 +1159,15 @@ class KnowledgeBaseController:
     def _create_persistent_chroma(self, kb_name, engine="chromadb"):
         """Create default vector database for knowledge base, if not specified"""
 
+        # Inline vector_store_name usage and avoid unnecessary variable
         vector_store_name = f"{kb_name}_{engine}"
 
-        vector_store_folder_name = f"{vector_store_name}"
-        connection_args = {"persist_directory": vector_store_folder_name}
-
-        # check if exists
+        # Only compute and use folder name if needed, skip the extra assignment
+        # directly use vector_store_name for the persist_directory
         if self.session.integration_controller.get(vector_store_name):
             return vector_store_name
 
-        self.session.integration_controller.add(vector_store_name, engine, connection_args)
+        self.session.integration_controller.add(vector_store_name, engine, {"persist_directory": vector_store_name})
         return vector_store_name
 
     def _create_embedding_model(self, project_name, engine="openai", params: dict = None, kb_name=""):
