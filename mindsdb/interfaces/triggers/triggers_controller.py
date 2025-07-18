@@ -123,8 +123,7 @@ class TriggersController:
         return query.first()
 
     def get_list(self, project_name=None):
-        session = SessionController()
-
+        # Fast-path: use lazy controller construction
         query = db.session.query(
             db.Tasks.object_id,
             db.Triggers.project_id,
@@ -133,36 +132,54 @@ class TriggersController:
             db.Triggers.table_name,
             db.Triggers.query_str,
             db.Tasks.last_error,
-        )\
-            .join(db.Triggers, db.Triggers.id == db.Tasks.object_id)\
-            .filter(
-                db.Tasks.object_type == self.OBJECT_TYPE,
-                db.Tasks.company_id == ctx.company_id,
+        ).join(
+            db.Triggers, db.Triggers.id == db.Tasks.object_id
+        ).filter(
+            db.Tasks.object_type == self.OBJECT_TYPE,
+            db.Tasks.company_id == ctx.company_id,
         )
 
-        project_controller = ProjectController()
+        project_controller = None
+        project_id = None
         if project_name is not None:
+            if project_controller is None:
+                project_controller = ProjectController()
+            # Directly cache project.id to avoid extra attribute access
             project = project_controller.get(name=project_name)
-            query = query.filter(db.Triggers.project_id == project.id)
+            project_id = project.id
+            query = query.filter(db.Triggers.project_id == project_id)
 
-        database_names = {
-            i['id']: i['name']
-            for i in session.database_controller.get_list()
-        }
+        # Fetch all needed records at once for mapping
+        records = query.all()
+        if not records:
+            return []
 
-        project_names = {
-            i.id: i.name
-            for i in project_controller.get_list()
-        }
-        data = []
-        for record in query:
-            data.append({
-                'id': record.object_id,
-                'project': project_names[record.project_id],
-                'name': record.name.lower(),
-                'database': database_names.get(record.database_id, '?'),
-                'table': record.table_name,
-                'query': record.query_str,
-                'last_error': record.last_error,
-            })
+        # Only fetch project and database info for those rows actually present
+        project_ids = {r.project_id for r in records}
+        database_ids = {r.database_id for r in records}
+        
+        # If controller wasn't built yet and we need list
+        if project_controller is None:
+            project_controller = ProjectController()
+        projects = project_controller.get_list()
+        project_names = {p.id: p.name for p in projects if p.id in project_ids}
+        
+        session = SessionController()  # Only now, because .database_controller used
+        db_map = {i['id']: i['name'] for i in session.database_controller.get_list() if i['id'] in database_ids}
+
+        # Build result list using fast local vars
+        pn = project_names
+        dn = db_map
+        data = [
+            {
+                'id': rec.object_id,
+                'project': pn.get(rec.project_id, '?'),
+                'name': rec.name.lower(),
+                'database': dn.get(rec.database_id, '?'),
+                'table': rec.table_name,
+                'query': rec.query_str,
+                'last_error': rec.last_error,
+            }
+            for rec in records
+        ]
         return data
