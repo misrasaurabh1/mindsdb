@@ -25,220 +25,197 @@ def query_traversal(node, callback, is_table=False, is_target=False, parent_quer
     ```
 
     """
-
+    # Optimization: Use append/pop to mutate the existing stack instead of list concatenation.
     if stack is None:
         stack = []
-
+    stack.append(node)
     res = callback(node, is_table=is_table, is_target=is_target, parent_query=parent_query, callstack=stack)
-    stack2 = [node] + stack
-
     if res is not None:
-        # node is going to be replaced
+        stack.pop()
         return res
 
-    if isinstance(node, ast.Select):
+    # For repeated assignment
+    qtr = query_traversal  # Localizing the function reference
+
+    # Fast branch: handle node types
+    node_type = type(node)
+    if node_type is ast.Select:
+        # For list attributes, minimize reallocation: create only if needed.
         if node.from_table is not None:
-            node_out = query_traversal(node.from_table, callback, is_table=True, parent_query=node, stack=stack2)
+            node_out = qtr(node.from_table, callback, is_table=True, parent_query=node, stack=stack)
             if node_out is not None:
                 node.from_table = node_out
 
-        array = []
-        for node2 in node.targets:
-            node_out = query_traversal(node2, callback, parent_query=node, is_target=True, stack=stack2) or node2
-            if isinstance(node_out, list):
-                array.extend(node_out)
-            else:
-                array.append(node_out)
-        node.targets = array
+        node.targets = [
+            y
+            for node2 in node.targets
+            for y in (
+                qtr(node2, callback, parent_query=node, is_target=True, stack=stack)
+                if isinstance(qtr(node2, callback, parent_query=node, is_target=True, stack=stack), list)
+                else [qtr(node2, callback, parent_query=node, is_target=True, stack=stack) or node2]
+            )
+        ]
 
         if node.cte is not None:
-            array = []
-            for cte in node.cte:
-                node_out = query_traversal(cte.query, callback, parent_query=node, stack=stack2) or cte
-                array.append(node_out)
-            node.cte = array
+            node.cte = [qtr(cte.query, callback, parent_query=node, stack=stack) or cte for cte in node.cte]
 
         if node.where is not None:
-            node_out = query_traversal(node.where, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.where, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.where = node_out
 
         if node.group_by is not None:
-            array = []
-            for node2 in node.group_by:
-                node_out = query_traversal(node2, callback, parent_query=node, stack=stack2) or node2
-                array.append(node_out)
-            node.group_by = array
+            node.group_by = [qtr(node2, callback, parent_query=node, stack=stack) or node2 for node2 in node.group_by]
 
         if node.having is not None:
-            node_out = query_traversal(node.having, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.having, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.having = node_out
 
         if node.order_by is not None:
-            array = []
-            for node2 in node.order_by:
-                node_out = query_traversal(node2, callback, parent_query=node, stack=stack2) or node2
-                array.append(node_out)
-            node.order_by = array
+            node.order_by = [qtr(node2, callback, parent_query=node, stack=stack) or node2 for node2 in node.order_by]
 
-    elif isinstance(node, (ast.Union, ast.Intersect, ast.Except)):
-        node_out = query_traversal(node.left, callback, parent_query=node, stack=stack2)
+    elif node_type in (ast.Union, ast.Intersect, ast.Except):
+        node_out = qtr(node.left, callback, parent_query=node, stack=stack)
         if node_out is not None:
             node.left = node_out
-        node_out = query_traversal(node.right, callback, parent_query=node, stack=stack2)
+        node_out = qtr(node.right, callback, parent_query=node, stack=stack)
         if node_out is not None:
             node.right = node_out
 
-    elif isinstance(node, ast.Join):
-        node_out = query_traversal(node.right, callback, is_table=True, parent_query=parent_query, stack=stack2)
+    elif node_type is ast.Join:
+        node_out = qtr(node.right, callback, is_table=True, parent_query=parent_query, stack=stack)
         if node_out is not None:
             node.right = node_out
-        node_out = query_traversal(node.left, callback, is_table=True, parent_query=parent_query, stack=stack2)
+        node_out = qtr(node.left, callback, is_table=True, parent_query=parent_query, stack=stack)
         if node_out is not None:
             node.left = node_out
         if node.condition is not None:
-            node_out = query_traversal(node.condition, callback, parent_query=parent_query, stack=stack2)
+            node_out = qtr(node.condition, callback, parent_query=parent_query, stack=stack)
             if node_out is not None:
                 node.condition = node_out
 
-    elif isinstance(node, (ast.Function, ast.BinaryOperation, ast.UnaryOperation, ast.BetweenOperation,
-                           ast.Exists, ast.NotExists)):
-        array = []
-        for arg in node.args:
-            node_out = query_traversal(arg, callback, parent_query=parent_query, stack=stack2) or arg
-            array.append(node_out)
-        node.args = array
+    elif node_type in (
+        ast.Function,
+        ast.BinaryOperation,
+        ast.UnaryOperation,
+        ast.BetweenOperation,
+        ast.Exists,
+        ast.NotExists,
+    ):
+        node.args = [qtr(arg, callback, parent_query=parent_query, stack=stack) or arg for arg in node.args]
+        if node_type is ast.Function and node.from_arg is not None:
+            node_out = qtr(node.from_arg, callback, parent_query=parent_query, stack=stack)
+            if node_out is not None:
+                node.from_arg = node_out
 
-        if isinstance(node, ast.Function):
-            if node.from_arg is not None:
-                node_out = query_traversal(node.from_arg, callback, parent_query=parent_query, stack=stack2)
-                if node_out is not None:
-                    node.from_arg = node_out
-
-    elif isinstance(node, ast.WindowFunction):
-        query_traversal(node.function, callback, parent_query=parent_query, stack=stack2)
+    elif node_type is ast.WindowFunction:
+        qtr(node.function, callback, parent_query=parent_query, stack=stack)
         if node.partition is not None:
-            array = []
-            for node2 in node.partition:
-                node_out = query_traversal(node2, callback, parent_query=parent_query, stack=stack2) or node2
-                array.append(node_out)
-            node.partition = array
+            node.partition = [
+                qtr(node2, callback, parent_query=parent_query, stack=stack) or node2 for node2 in node.partition
+            ]
         if node.order_by is not None:
-            array = []
-            for node2 in node.order_by:
-                node_out = query_traversal(node2, callback, parent_query=parent_query, stack=stack2) or node2
-                array.append(node_out)
-            node.order_by = array
+            node.order_by = [
+                qtr(node2, callback, parent_query=parent_query, stack=stack) or node2 for node2 in node.order_by
+            ]
 
-    elif isinstance(node, ast.TypeCast):
-        node_out = query_traversal(node.arg, callback, parent_query=parent_query, stack=stack2)
+    elif node_type is ast.TypeCast:
+        node_out = qtr(node.arg, callback, parent_query=parent_query, stack=stack)
         if node_out is not None:
             node.arg = node_out
 
-    elif isinstance(node, ast.Tuple):
-        array = []
-        for node2 in node.items:
-            node_out = query_traversal(node2, callback, parent_query=parent_query, stack=stack2) or node2
-            array.append(node_out)
-        node.items = array
+    elif node_type is ast.Tuple:
+        node.items = [qtr(node2, callback, parent_query=parent_query, stack=stack) or node2 for node2 in node.items]
 
-    elif isinstance(node, ast.Insert):
+    elif node_type is ast.Insert:
         if node.table is not None:
-            node_out = query_traversal(node.table, callback, is_table=True, parent_query=node, stack=stack2)
+            node_out = qtr(node.table, callback, is_table=True, parent_query=node, stack=stack)
             if node_out is not None:
                 node.table = node_out
 
         if node.values is not None:
-            rows = []
-            for row in node.values:
-                items = []
-                for item in row:
-                    item2 = query_traversal(item, callback, parent_query=node, stack=stack2) or item
-                    items.append(item2)
-                rows.append(items)
-            node.values = rows
+            node.values = [
+                [qtr(item, callback, parent_query=node, stack=stack) or item for item in row] for row in node.values
+            ]
 
         if node.from_select is not None:
-            node_out = query_traversal(node.from_select, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.from_select, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.from_select = node_out
 
-    elif isinstance(node, ast.Update):
+    elif node_type is ast.Update:
         if node.table is not None:
-            node_out = query_traversal(node.table, callback, is_table=True, parent_query=node, stack=stack2)
+            node_out = qtr(node.table, callback, is_table=True, parent_query=node, stack=stack)
             if node_out is not None:
                 node.table = node_out
 
         if node.where is not None:
-            node_out = query_traversal(node.where, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.where, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.where = node_out
 
         if node.update_columns is not None:
-            changes = {}
-            for k, v in node.update_columns.items():
-                v2 = query_traversal(v, callback, parent_query=node, stack=stack2)
-                if v2 is not None:
-                    changes[k] = v2
-            if changes:
-                node.update_columns.update(changes)
+            upd = {
+                k: v2
+                for k, v in node.update_columns.items()
+                for v2 in [qtr(v, callback, parent_query=node, stack=stack)]
+                if v2 is not None
+            }
+            if upd:
+                node.update_columns.update(upd)
 
         if node.from_select is not None:
-            node_out = query_traversal(node.from_select, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.from_select, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.from_select = node_out
 
-    elif isinstance(node, ast.CreateTable):
-        array = []
+    elif node_type is ast.CreateTable:
         if node.columns is not None:
-            for node2 in node.columns:
-                node_out = query_traversal(node2, callback, parent_query=node, stack=stack2) or node2
-                array.append(node_out)
-            node.columns = array
-
+            node.columns = [qtr(node2, callback, parent_query=node, stack=stack) or node2 for node2 in node.columns]
         if node.name is not None:
-            node_out = query_traversal(node.name, callback, is_table=True, parent_query=node, stack=stack2)
+            node_out = qtr(node.name, callback, is_table=True, parent_query=node, stack=stack)
             if node_out is not None:
                 node.name = node_out
-
         if node.from_select is not None:
-            node_out = query_traversal(node.from_select, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.from_select, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.from_select = node_out
 
-    elif isinstance(node, ast.Delete):
+    elif node_type is ast.Delete:
         if node.where is not None:
-            node_out = query_traversal(node.where, callback, parent_query=node, stack=stack2)
+            node_out = qtr(node.where, callback, parent_query=node, stack=stack)
             if node_out is not None:
                 node.where = node_out
 
-    elif isinstance(node, ast.OrderBy):
+    elif node_type is ast.OrderBy:
         if node.field is not None:
-            node_out = query_traversal(node.field, callback, parent_query=parent_query, stack=stack2)
+            node_out = qtr(node.field, callback, parent_query=parent_query, stack=stack)
             if node_out is not None:
                 node.field = node_out
 
-    elif isinstance(node, ast.Case):
-        rules = []
-        for condition, result in node.rules:
-            condition2 = query_traversal(condition, callback, parent_query=parent_query, stack=stack2)
-            result2 = query_traversal(result, callback, parent_query=parent_query, stack=stack2)
-
-            condition = condition if condition2 is None else condition2
-            result = result if result2 is None else result2
-            rules.append([condition, result])
-        node.rules = rules
-        default = query_traversal(node.default, callback, parent_query=parent_query, stack=stack2)
+    elif node_type is ast.Case:
+        node.rules = [
+            [
+                (
+                    c2
+                    if (c2 := qtr(condition, callback, parent_query=parent_query, stack=stack)) is not None
+                    else condition
+                ),
+                (r2 if (r2 := qtr(result, callback, parent_query=parent_query, stack=stack)) is not None else result),
+            ]
+            for condition, result in node.rules
+        ]
+        default = qtr(node.default, callback, parent_query=parent_query, stack=stack)
         if default is not None:
             node.default = default
 
     elif isinstance(node, list):
-        array = []
-        for node2 in node:
-            node_out = query_traversal(node2, callback, parent_query=parent_query, stack=stack2) or node2
-            array.append(node_out)
-        return array
+        # Return a new list, don't mutate the original (conservative for safety).
+        res_list = [qtr(node2, callback, parent_query=parent_query, stack=stack) or node2 for node2 in node]
+        stack.pop()
+        return res_list
 
+    stack.pop()
     # keep original node
     return None
