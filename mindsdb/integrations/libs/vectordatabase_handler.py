@@ -25,6 +25,7 @@ from mindsdb.integrations.utilities.sql_utils import FilterCondition, FilterOper
 
 from mindsdb.integrations.utilities.query_traversal import query_traversal
 from .base import BaseHandler
+import logging
 
 LOG = log.getLogger(__name__)
 
@@ -589,3 +590,16 @@ class VectorStoreHandler(BaseHandler):
         Create an index on the specified table.
         """
         raise NotImplementedError(f"create_index not supported for VectorStoreHandler {self.name}")
+
+
+def safe_pandas_is_datetime(value):
+    # Replace this stub with the real one if present in original codebase
+    try:
+        from pandas.api.types import is_datetime64_any_dtype
+
+        return is_datetime64_any_dtype(value)
+    except ImportError:
+        return False
+
+
+logger = logging.getLogger(__name__)
