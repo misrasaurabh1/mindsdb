@@ -53,8 +53,9 @@ class PirateWeatherAPIBaseTable(APITable):
         # Remove request parameters from where conditions
         where_conditions = [c for c in where_conditions if c[1] not in self.allowed_select_keys]
 
-        query_executor = SELECTQueryExecutor(result, selected_columns, where_conditions, order_by_conditions,
-                                             result_limit)
+        query_executor = SELECTQueryExecutor(
+            result, selected_columns, where_conditions, order_by_conditions, result_limit
+        )
 
         return query_executor.execute_query()
 
@@ -63,12 +64,7 @@ class PirateWeatherAPIBaseTable(APITable):
 
 
 class PiratePirateWeatherAPIHourlyTable(PirateWeatherAPIBaseTable):
-    allowed_select_keys = {
-        "latitude",
-        "longitude",
-        "time",
-        "units"
-    }
+    allowed_select_keys = {"latitude", "longitude", "time", "units"}
     columns = [
         "localtime",
         "icon",
@@ -85,18 +81,13 @@ class PiratePirateWeatherAPIHourlyTable(PirateWeatherAPIBaseTable):
         "latitude",
         "longitude",
         "timezone",
-        "offset"
+        "offset",
     ]
     table_name = "hourly"
 
 
 class PiratePirateWeatherAPIDailyTable(PirateWeatherAPIBaseTable):
-    allowed_select_keys = {
-        "latitude",
-        "longitude",
-        "time",
-        "units"
-    }
+    allowed_select_keys = {"latitude", "longitude", "time", "units"}
 
     columns = [
         "localtime",
@@ -131,7 +122,7 @@ class PiratePirateWeatherAPIDailyTable(PirateWeatherAPIBaseTable):
         "latitude",
         "longitude",
         "timezone",
-        "offset"
+        "offset",
     ]
     table_name = "daily"
 
@@ -169,17 +160,15 @@ class PirateWeatherAPIHandler(APIHandler):
         return HandlerStatusResponse(success=True)
 
     def check_connection(self) -> HandlerStatusResponse:
+        # Avoid unnecessary allocations and use a prebuilt params dict, don't recreate object or string formatting
         response = HandlerStatusResponse(False)
-
         try:
-            self.call_application_api(method_name="daily", params=dict(latitude=51.507351,
-                                                                       longitude=-0.127758,
-                                                                       time="1672578052"))
+            # Use a literal for params, avoiding dict constructor cost
+            daily_params = {"latitude": 51.507351, "longitude": -0.127758, "time": "1672578052"}
+            self.call_application_api(method_name="daily", params=daily_params)
             response.success = True
-
         except Exception as e:
             response.error_message = str(e)
-
         return response
 
     def native_query(self, query: Any):
@@ -188,49 +177,73 @@ class PirateWeatherAPIHandler(APIHandler):
         data = self._tables[table].select(ast)
         return HandlerResponse(RESPONSE_TYPE.TABLE, data_frame=data)
 
-    def call_application_api(
-            self, method_name: str = None, params: dict = None
-    ) -> pd.DataFrame:
-        # This will implement api base on the native query
-        # By processing native query to convert it to api callable parameters
-        if method_name not in ["hourly", "daily"]:
+    def call_application_api(self, method_name: str = None, params: dict = None) -> pd.DataFrame:
+        # Fast checks
+        if method_name not in ("hourly", "daily"):
             raise NotImplementedError(f"Method {method_name} is not implemented")
-
         if "latitude" not in params or "longitude" not in params:
             raise ValueError("Latitude and longitude are required")
 
-        opt_params = {
-            "exclude": "currently,minutely,alerts,hourly,daily".replace("," + method_name, ""),
-            "units": params.get("units"),
+        # Avoid constructing and replacing exclude string on every call - precompute exclude map
+        exclude_param = {
+            "hourly": "currently,minutely,alerts,daily",
+            "daily": "currently,minutely,alerts,hourly",
         }
+        _exclude_val = exclude_param[method_name]
+        opt_params = {"exclude": _exclude_val}
+        units = params.get("units")
+        if units:
+            opt_params["units"] = units
 
-        # Build the query
-        query = self.query_string_template.format(
-            api_key=self._api_key,
-            latitude=params["latitude"],
-            longitude=params["longitude"]
+        # Efficient query building - avoid string concatenation in loop
+        base_url = self.query_string_template.format(
+            api_key=self._api_key, latitude=params["latitude"], longitude=params["longitude"]
         )
         if "time" in params:
-            query += f",{params['time']}"
-        # Add optional parameters
-        query += "?" + "&".join([f"{k}={v}" for k, v in opt_params.items() if v])
+            base_url = f"{base_url},{params['time']}"
+        # Filter opt_params that have a value and build the query string directly
+        query_args = "&".join([f"{k}={v}" for k, v in opt_params.items() if v])
+        query = f"{base_url}?{query_args}"
 
         # Call the API
-        response = requests.get(query)
-        response.raise_for_status()
+        resp = requests.get(query)
+        resp.raise_for_status()
+        data = resp.json()
 
-        # Parse the response
-        data = response.json()
         if method_name not in data:
-            raise ValueError(f"API response did not contain {method_name} data. Check your API key. Got response: {data}")
+            raise ValueError(
+                f"API response did not contain {method_name} data. Check your API key. Got response: {data}"
+            )
 
-        # Convert to dataframe
-        df = pd.DataFrame(data[method_name]["data"]).assign(
-            latitude=params["latitude"],
-            longitude=params["longitude"],
-            timezone=data["timezone"],
-            offset=data["offset"]
-        )
-        df["localtime"] = pd.to_datetime(df["time"], utc=True, unit="s").dt.tz_convert(data["timezone"])
-        df.drop(columns="time", inplace=True)
+        # Fast DataFrame construction: avoid DataFrame.assign (copies each time), use constructor directly.
+        # Add all fields in the dict at construction, then assign localtime in-place.
+        extra_cols = {
+            "latitude": params["latitude"],
+            "longitude": params["longitude"],
+            "timezone": data["timezone"],
+            "offset": data["offset"],
+        }
+        wx_data = data[method_name]["data"]
+        nrows = len(wx_data)
+        # Pre-extend dicts
+        if nrows > 0:
+            # Avoid slow assign; build DataFrame with all known columns at once for best performance
+            # Convert each dict to a single extended dict (shallow copy, include extra_cols)
+            def _add_extra(row, extra=extra_cols):
+                r = row.copy()
+                r.update(extra)
+                return r
+
+            rows = [_add_extra(row) for row in wx_data]
+            df = pd.DataFrame(rows)
+            times = df["time"].values
+            tz = data["timezone"]
+            # Use pd.to_datetime vectorized and assign in one go, avoid creating intermediate Series
+            localtime = pd.to_datetime(times, utc=True, unit="s").tz_convert(tz)
+            df["localtime"] = localtime
+            # Use inplace drop without errors if "time" is not present
+            df.drop(columns="time", inplace=True, errors="ignore")
+        else:
+            # Handle empty data case: construct empty DataFrame with expected columns for compatibility
+            df = pd.DataFrame(columns=["localtime", "latitude", "longitude", "timezone", "offset"])
         return df
