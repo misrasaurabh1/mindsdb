@@ -217,13 +217,18 @@ def handle_agent_error(e, error_message=None):
 
 
 def process_chunk(chunk):
-    if isinstance(chunk, dict):
+    t = type(chunk)
+    if t is dict:
+        # dict comprehension with direct attribute access for faster iteration
         return {k: process_chunk(v) for k, v in chunk.items()}
-    elif isinstance(chunk, list):
+    elif t is list:
+        # list comprehension for faster recursion
         return [process_chunk(item) for item in chunk]
-    elif isinstance(chunk, (str, int, float, bool, type(None))):
+    elif t in _primitive_types:
+        # primitive type, just return
         return chunk
     else:
+        # fallback to string conversion for all other types
         return str(chunk)
 
 
@@ -728,3 +733,6 @@ AI: {response}"""
         if isinstance(chunk, (str, int, float, bool, type(None))):
             return chunk
         return str(chunk)
+
+
+_primitive_types = (str, int, float, bool, type(None))
