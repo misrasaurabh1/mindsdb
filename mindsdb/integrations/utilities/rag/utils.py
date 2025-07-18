@@ -22,10 +22,12 @@ def df_to_documents(df: pd.DataFrame, content_column_name: str) -> List[Document
     return documents
 
 
-def documents_to_df(content_column_name: str,
-                    documents: List[Document],
-                    embedding_model: Embeddings = None,
-                    with_embeddings: bool = False) -> pd.DataFrame:
+def documents_to_df(
+    content_column_name: str,
+    documents: List[Document],
+    embedding_model: Embeddings = None,
+    with_embeddings: bool = False,
+) -> pd.DataFrame:
     """
     Given a list of documents, convert it to a dataframe.
 
@@ -36,17 +38,41 @@ def documents_to_df(content_column_name: str,
 
     :return: pd.DataFrame
     """
-    df = pd.DataFrame([doc.metadata for doc in documents])
+    if not documents:
+        return pd.DataFrame()
 
-    df[content_column_name] = [doc.page_content for doc in documents]
+    # Extract metadata and page_content in a single pass for efficiency
+    meta_list = []
+    content_list = []
+    for doc in documents:
+        # Shallow copy metadata to avoid mutating original
+        meta = dict(doc.metadata) if doc.metadata is not None else {}
+        meta_list.append(meta)
+        content_list.append(doc.page_content)
 
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    # Get all unique metadata keys to ensure consistent column order
+    all_keys = set()
+    for meta in meta_list:
+        all_keys.update(meta.keys())
 
-    # Reordering the columns to have the content column first.
-    df = df[[content_column_name] + [col for col in df.columns if col != content_column_name]]
+    # Insert content_column_name as the first field
+    columns = [content_column_name] + sorted(k for k in all_keys if k != content_column_name)
+
+    # Build rows as dicts in the right order to avoid reordering DataFrame
+    rows = []
+    for meta, content in zip(meta_list, content_list):
+        row = {k: meta.get(k, None) for k in all_keys}
+        row[content_column_name] = content  # Insert content
+        rows.append(row)
+
+    # Build DataFrame
+    df = pd.DataFrame(rows, columns=columns)
+
+    # Only parse 'date' if it exists in columns.
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
     if with_embeddings:
-        df["embeddings"] = embedding_model.embed_documents(df[content_column_name].tolist())
+        df["embeddings"] = embedding_model.embed_documents(content_list)
 
     return df
