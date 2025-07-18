@@ -58,16 +58,15 @@ class PlanJoin:
     def check_single_integration(self, query):
         query_info = self.planner.get_query_info(query)
 
+        integrations = query_info["integrations"]
+        mdb_entities = query_info["mdb_entities"]
+
         # can we send all query to integration?
 
         # one integration and not mindsdb objects in query
-        if (
-            len(query_info["mdb_entities"]) == 0
-            and len(query_info["integrations"]) == 1
-            and "files" not in query_info["integrations"]
-            and "views" not in query_info["integrations"]
-        ):
-            int_name = list(query_info["integrations"])[0]
+        if not mdb_entities and len(integrations) == 1 and "files" not in integrations and "views" not in integrations:
+            # Optimized: direct unpacking instead of casting to list and indexing
+            (int_name,) = integrations
             # if is sql database
             if self.planner.integrations.get(int_name, {}).get("class_type") != "api":
                 # send to this integration
