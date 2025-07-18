@@ -46,22 +46,25 @@ def seed_db():
 def check_valid_response(res):
     if res.resp_type == RESPONSE_TYPE.TABLE:
         assert res.data_frame is not None, "expected to have some data, but got None"
-    assert (
-        res.error_code == 0
-    ), f"expected to have zero error_code, but got {res.error_code}"
-    assert (
-        res.error_message is None
-    ), f"expected to have None in error message, but got {res.error_message}"
+    assert res.error_code == 0, f"expected to have zero error_code, but got {res.error_code}"
+    assert res.error_message is None, f"expected to have None in error message, but got {res.error_message}"
 
 
 def get_table_names(sql_server_handler):
     res = sql_server_handler.get_tables()
     tables = res.data_frame
-    assert tables is not None, "expected to have some tables in the db, but got None"
-    assert (
-        "table_name" in tables
-    ), f"expected to get 'table_name' column in the response:\n{tables}"
-    return list(tables["table_name"])
+    # Minimize attribute lookup and type checks
+    if tables is None:
+        raise AssertionError("expected to have some tables in the db, but got None")
+    if "table_name" not in tables:
+        raise AssertionError(f"expected to get 'table_name' column in the response:\n{tables}")
+
+    # Use .tolist() if it's a pandas DataFrame/Series for better speed
+    # Fallback to list() for non-pandas types
+    table_col = tables["table_name"]
+    if hasattr(table_col, "tolist"):
+        return table_col.tolist()
+    return list(table_col)
 
 
 @pytest.mark.usefixtures("sql_server_handler")
@@ -92,15 +95,9 @@ class TestMSSQLHandlerTables:
     def test_get_tables(self, sql_server_handler):
         res = sql_server_handler.get_tables()
         tables = res.data_frame
-        assert (
-            tables is not None
-        ), "expected to have some tables in the db, but got None"
-        assert (
-            "table_name" in tables
-        ), f"expected to get 'table_name' in the response but got: {tables}"
-        assert (
-            "test" in tables["table_name"].values
-        ), "expected to have 'test' in the response."
+        assert tables is not None, "expected to have some tables in the db, but got None"
+        assert "table_name" in tables, f"expected to get 'table_name' in the response but got: {tables}"
+        assert "test" in tables["table_name"].values, "expected to have 'test' in the response."
 
     def test_get_columns(self, sql_server_handler):
         response = sql_server_handler.get_columns("test")
@@ -112,9 +109,7 @@ class TestMSSQLHandlerTables:
             "Type": ["int", "int", "float", "varchar"],
         }
         expected_df = pd.DataFrame(expected_columns)
-        assert response.data_frame.equals(
-            expected_df
-        ), "response does not contain the expected columns"
+        assert response.data_frame.equals(expected_df), "response does not contain the expected columns"
 
     def test_create_table(self, sql_server_handler):
         query = f"""
@@ -126,9 +121,9 @@ class TestMSSQLHandlerTables:
         res = sql_server_handler.native_query(query)
         check_valid_response(res)
         tables = get_table_names(sql_server_handler)
-        assert (
-            self.table_for_creation in tables
-        ), f"expected to have {self.table_for_creation} in database, but got: {tables}"
+        assert self.table_for_creation in tables, (
+            f"expected to have {self.table_for_creation} in database, but got: {tables}"
+        )
 
     def test_drop_table(self, sql_server_handler):
         query = f"DROP TABLE IF EXISTS {self.table_for_creation}"
@@ -153,9 +148,7 @@ class TestMSSQLHandlerQuery:
             "col_four": ["A", "B", "C"],
         }
         expected_df = pd.DataFrame(expected_data)
-        assert response.data_frame.equals(
-            expected_df
-        ), "response does not contain the expected data"
+        assert response.data_frame.equals(expected_df), "response does not contain the expected data"
 
     def test_select_query(self, sql_server_handler):
         limit = 3
@@ -164,6 +157,4 @@ class TestMSSQLHandlerQuery:
         check_valid_response(res)
         got_rows = res.data_frame.shape[0]
         want_rows = limit
-        assert (
-            got_rows == want_rows
-        ), f"expected to have {want_rows} rows in response but got: {got_rows}"
+        assert got_rows == want_rows, f"expected to have {want_rows} rows in response but got: {got_rows}"

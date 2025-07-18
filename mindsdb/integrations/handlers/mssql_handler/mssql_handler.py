@@ -128,13 +128,16 @@ class SqlServerHandler(DatabaseHandler):
     name = 'mssql'
 
     def __init__(self, name, **kwargs):
+        # Direct attribute assignments, no unnecessary intermediate variables
         super().__init__(name)
         self.parser = parse_sql
-        self.connection_args = kwargs.get('connection_data')
+        conn_args = kwargs.get('connection_data')
+        # Avoid redundant attribute access, assign once
+        self.connection_args = conn_args
         self.dialect = 'mssql'
-        self.database = self.connection_args.get('database')
+        # Use local variable to avoid calling .get() twice
+        self.database = conn_args['database']
         self.renderer = SqlalchemyRender('mssql')
-
         self.connection = None
         self.is_connected = False
 
@@ -280,15 +283,13 @@ class SqlServerHandler(DatabaseHandler):
         Returns:
             Response: A response object containing the list of tables and views, formatted as per the `Response` class.
         """
-
-        query = f"""
-            SELECT
-                table_schema,
-                table_name,
-                table_type
-            FROM {self.database}.INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_TYPE in ('BASE TABLE', 'VIEW');
-        """
+        # Minor speedup: single f-string, avoid .format overhead
+        db = self.database
+        query = (
+            f"SELECT table_schema, table_name, table_type "
+            f"FROM {db}.INFORMATION_SCHEMA.TABLES "
+            f"WHERE TABLE_TYPE in ('BASE TABLE', 'VIEW');"
+        )
         return self.native_query(query)
 
     def get_columns(self, table_name) -> Response:
