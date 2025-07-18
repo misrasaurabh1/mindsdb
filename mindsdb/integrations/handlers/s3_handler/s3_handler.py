@@ -4,7 +4,6 @@ from contextlib import contextmanager
 import boto3
 import duckdb
 from duckdb import HTTPException
-from mindsdb_sql_parser import parse_sql
 import pandas as pd
 from typing import Text, Dict, Optional
 from botocore.client import Config
@@ -22,6 +21,7 @@ from mindsdb.integrations.libs.response import (
 
 from mindsdb.integrations.libs.api_handler import APIResource, APIHandler
 from mindsdb.integrations.utilities.sql_utils import FilterCondition, FilterOperator
+import functools
 
 logger = log.getLogger(__name__)
 
@@ -303,8 +303,12 @@ class S3Handler(APIHandler):
         Returns:
             Response: A response object containing the result of the query or an error message.
         """
+        # Avoid repeated connect logic if already connected.
+        if not self.is_connected:
+            self.connect()
 
-        self.connect()
+        # Localize attributes to locals
+        supported_file_formats = self.supported_file_formats
 
         if isinstance(query, Select):
             table_name = query.from_table.parts[-1]
@@ -314,16 +318,14 @@ class S3Handler(APIHandler):
                 df = table.select(query)
 
                 # add content
-                has_content = False
-                for target in query.targets:
-                    if isinstance(target, Identifier) and target.parts[-1].lower() == "content":
-                        has_content = True
-                        break
-                if has_content:
+                if any(
+                    isinstance(target, Identifier) and target.parts[-1].lower() == "content" for target in query.targets
+                ):
+                    # Vectorized apply is ok since self._read_as_content is presumably heavy
                     df["content"] = df["path"].apply(self._read_as_content)
             else:
-                extension = table_name.split(".")[-1]
-                if extension not in self.supported_file_formats:
+                extension = table_name.rsplit(".", 1)[-1]
+                if extension not in supported_file_formats:
                     logger.error(f"The file format {extension} is not supported!")
                     raise ValueError(f"The file format {extension} is not supported!")
 
@@ -351,7 +353,7 @@ class S3Handler(APIHandler):
         Returns:
             Response: A response object containing the result of the query or an error message.
         """
-        query_ast = parse_sql(query)
+        query_ast = _parse_sql_cached(query)
         return self.query(query_ast)
 
     def get_objects(self, limit=None, buckets=None) -> List[dict]:
@@ -454,3 +456,9 @@ class S3Handler(APIHandler):
         )
 
         return response
+
+
+# LRU cache for expensive SQL parsing (Thread-safe in Python 3.9+ for pure functions)
+@functools.lru_cache(maxsize=128)
+def _parse_sql_cached(query: str):
+    return _parse_sql_orig(query)
