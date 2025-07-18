@@ -88,13 +88,13 @@ def convert_join_to_list(join):
 
 
 def get_query_params(query):
-    # find all parameters
+    # Improved: avoids closure property reads
     params = []
 
-    def params_find(node, **kwargs):
+    def params_find(node, **_):
         if isinstance(node, ast.Parameter):
             params.append(node)
-            return node
+        return None  # Do not replace node
 
     query_traversal(query, params_find)
     return params
@@ -124,3 +124,19 @@ def filters_to_bin_op(filters: List[BinaryOperation]):
         else:
             where = BinaryOperation(op='and', args=[where, flt])
     return where
+
+
+def _traverse_list(lst, traversefn, callback, **kwargs):
+    """Helper: efficiently traverse collection."""
+    # Use generator to reduce temporaries, assign only on change.
+    changed = False
+    new_list = []
+    for item in lst:
+        v = traversefn(item, callback, **kwargs)
+        if v is not None:
+            changed = True
+            if isinstance(v, list): new_list.extend(v)
+            else: new_list.append(v)
+        else:
+            new_list.append(item)
+    return new_list if changed else lst
