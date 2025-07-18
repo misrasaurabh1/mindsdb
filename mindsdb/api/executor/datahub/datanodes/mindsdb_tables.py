@@ -250,12 +250,13 @@ class TriggersTable(MdbTable):
 
         triggers_controller = TriggersController()
 
+        # Only extract project_name if relevant
         project_name = None
         if (
             isinstance(query, Select)
-            and type(query.where) is BinaryOperation
+            and isinstance(query.where, BinaryOperation)
             and query.where.op == "="
-            and query.where.args[0].parts == ["project"]
+            and getattr(query.where.args[0], "parts", None) == ["project"]
             and isinstance(query.where.args[1], Constant)
         ):
             project_name = query.where.args[1].value
@@ -267,10 +268,13 @@ class TriggersTable(MdbTable):
             columns = columns + cls.columns
         columns_lower = [col.lower() for col in columns]
 
-        # to list of lists
-        data = [[row.get(k) for k in columns_lower] for row in data]
-
-        return pd.DataFrame(data, columns=columns)
+        # Build DataFrame in one step
+        if data:
+            data_rows = [[row.get(k) for k in columns_lower] for row in data]
+            return pd.DataFrame(data_rows, columns=columns)
+        else:
+            # Return empty DataFrame with correct columns (avoids pandas bug)
+            return pd.DataFrame(columns=columns)
 
 
 class ChatbotsTable(MdbTable):
