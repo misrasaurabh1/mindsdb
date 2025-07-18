@@ -232,12 +232,16 @@ class S3Handler(APIHandler):
         return response
 
     def _get_bucket(self, key):
-        if self.bucket is not None:
-            return self.bucket, key
+        bucket = self.bucket
+        if bucket is not None:
+            return bucket, key
 
-        # get bucket from first part of the key
-        ar = key.split("/")
-        return ar[0], "/".join(ar[1:])
+        # Use partition to efficiently split only once
+        first, sep, rest = key.partition("/")
+        if sep:  # There was at least one "/"
+            return first, rest
+        else:
+            return first, ""  # No slash in key - treat whole as bucket, rest empty
 
     def read_as_table(self, key) -> pd.DataFrame:
         """
