@@ -85,15 +85,15 @@ class DocumentPreprocessor:
         """Generate human-readable deterministic ID for a chunk
         Format: <doc_id>:<content_column>:<chunk_number>of<total_chunks>:<start_char>to<end_char>
         """
+
+        # Inlining string formatting is fastest here; skip logging for performance
         if provided_id is None:
             raise ValueError("Document ID must be provided for chunk ID generation")
-
         if content_column is None:
             raise ValueError("Content column must be provided for chunk ID generation")
 
-        chunk_id = f"{provided_id}:{content_column}:{chunk_index + 1}of{total_chunks}:{start_char}to{end_char}"
-        logger.debug(f"Generated chunk ID: {chunk_id}")
-        return chunk_id
+        # Avoid non-essential logger.debug() call for faster execution.
+        return f"{provided_id}:{content_column}:{chunk_index + 1}of{total_chunks}:{start_char}to{end_char}"
 
     def _prepare_chunk_metadata(
         self,
