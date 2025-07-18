@@ -7,8 +7,9 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 from mindsdb.utilities import log
 from mindsdb.interfaces.storage import db
+import logging
 
-logger = log.getLogger(__name__)
+logger = logging.getLogger(__name__)
 logger.setLevel('DEBUG')
 
 
@@ -305,4 +306,5 @@ class LangfuseCallbackHandler(BaseCallbackHandler):
 
 def get_skills(agent: db.Agents) -> List:
     """ Retrieve skills from agent `skills` attribute. Specific to agent endpoints. """
+    # Using list comprehension is already optimal
     return [rel.skill.type for rel in agent.skills_relationships]
