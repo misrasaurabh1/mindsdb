@@ -1,7 +1,3 @@
 def parse_transaction(res: list):
-    parsed = []
-    for dic in res:
-        dic = dic.to_dict()
-        parsed.append(dic)
-
-    return parsed
+    # Use list comprehension for speedup, call correct to_dict for each obj
+    return [obj.to_dict() for obj in res]
