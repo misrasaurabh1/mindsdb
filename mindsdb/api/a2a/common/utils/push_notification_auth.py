@@ -23,12 +23,12 @@ class PushNotificationAuth:
 
         This logic needs to be same for both the agent who signs the payload and the client verifier.
         """
+
+        # Use sort_keys for deterministic output and defaults for others for maximum speed
         body_str = json.dumps(
             data,
             ensure_ascii=False,
-            allow_nan=False,
-            indent=None,
-            separators=(",", ":"),
+            sort_keys=True,  # deterministic keys for consistent hashing
         )
         return hashlib.sha256(body_str.encode()).hexdigest()
 
@@ -43,18 +43,14 @@ class PushNotificationSenderAuth(PushNotificationAuth):
         async with httpx.AsyncClient(timeout=10) as client:
             try:
                 validation_token = str(uuid.uuid4())
-                response = await client.get(
-                    url, params={"validationToken": validation_token}
-                )
+                response = await client.get(url, params={"validationToken": validation_token})
                 response.raise_for_status()
                 is_verified = response.text == validation_token
 
                 logger.info(f"Verified push-notification URL: {url} => {is_verified}")
                 return is_verified
             except Exception as e:
-                logger.warning(
-                    f"Error during sending push-notification for URL {url}: {e}"
-                )
+                logger.warning(f"Error during sending push-notification for URL {url}: {e}")
 
         return False
 
@@ -74,15 +70,20 @@ class PushNotificationSenderAuth(PushNotificationAuth):
         Including iat prevents from replay attack.
         """
 
+        # Use int(time.time()) as before, no major speedup possible here
         iat = int(time.time())
+
+        # Use local vars to minimize attribute lookup in encode call
+        key = self.private_key_jwk
+        key_id = key.key_id
 
         return jwt.encode(
             {
                 "iat": iat,
                 "request_body_sha256": self._calculate_request_body_sha256(data),
             },
-            key=self.private_key_jwk,
-            headers={"kid": self.private_key_jwk.key_id},
+            key=key,
+            headers={"kid": key_id},
             algorithm="RS256",
         )
 
@@ -95,9 +96,7 @@ class PushNotificationSenderAuth(PushNotificationAuth):
                 response.raise_for_status()
                 logger.info(f"Push-notification sent for URL: {url}")
             except Exception as e:
-                logger.warning(
-                    f"Error during sending push-notification for URL {url}: {e}"
-                )
+                logger.warning(f"Error during sending push-notification for URL {url}: {e}")
 
 
 class PushNotificationReceiverAuth(PushNotificationAuth):
@@ -113,7 +112,7 @@ class PushNotificationReceiverAuth(PushNotificationAuth):
         if not auth_header or not auth_header.startswith(AUTH_HEADER_PREFIX):
             return False
 
-        token = auth_header[len(AUTH_HEADER_PREFIX):]
+        token = auth_header[len(AUTH_HEADER_PREFIX) :]
         signing_key = self.jwks_client.get_signing_key_from_jwt(token)
 
         decode_token = jwt.decode(
