@@ -111,10 +111,16 @@ class DatabasesTable(MdbTable):
 
     @classmethod
     def get_data(cls, session, inf_schema, **kwargs):
-        project = inf_schema.database_controller.get_list(with_secrets=session.show_secrets)
-        data = [[x["name"], x["type"], x["engine"], to_json(x.get("connection_data"))] for x in project]
+        columns = cls.columns  # cache attribute for tiny perf boost
+        show_secrets = session.show_secrets  # cache attribute
+        db_controller = inf_schema.database_controller  # cache attribute
+        project = db_controller.get_list(with_secrets=show_secrets)
 
-        df = pd.DataFrame(data, columns=cls.columns)
+        # Faster to reuse locals, less attribute dereferencing in loop
+        json_ = to_json
+        records = [[x["name"], x["type"], x["engine"], json_(x.get("connection_data"))] for x in project]
+
+        df = pd.DataFrame.from_records(records, columns=columns)
         return df
 
 
