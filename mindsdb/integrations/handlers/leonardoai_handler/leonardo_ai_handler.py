@@ -31,7 +31,8 @@ class LeonardoAIHandler(BaseMLEngine):
         super().__init__(*args, **kwargs)
         self.all_models = []
         self.default_model = '6bef9f1b-29cb-40c7-b9df-32b51c1f67d3'
-        self.base_api = LEONARDO_API_BASE
+        # Use constant for the API base (from imported, for performance, set as attribute is OK)
+        self.base_api = "https://cloud.leonardo.ai/api/rest/v1"
         self.rate_limit = 50
         self.max_batch_size = 5  # default value
 
@@ -71,11 +72,13 @@ class LeonardoAIHandler(BaseMLEngine):
             raise Exception("Auth Connection Error, please the modelId or API key")
 
     def predict(self, df: pd.DataFrame, args: Optional[Dict] = None, **kwargs) -> pd.DataFrame:
-
         pred_args = args['predict_params'] if args else {}
-        args = self.model_storage.json_get("args")
+        model_args = self.model_storage.json_get("args")
 
-        prompt_template = pred_args.get('prompt_template', args.get('prompt_template', 'Generate a picture of {{{{text}}}}'))
+        prompt_template = pred_args.get(
+            'prompt_template',
+            model_args.get('prompt_template', 'Generate a picture of {{{{text}}}}')
+        )
 
         # prepare prompts
         prompts, empty_prompt_id = get_completed_prompts(prompt_template, df)
@@ -156,7 +159,6 @@ class LeonardoAIHandler(BaseMLEngine):
         height = tmp_args.get('height', 512)
         width = tmp_args.get('width', 512)
         api_key = self._get_leonardo_api_key(args, self.engine_storage)  # fetch API key
-        generation_id = ''
 
         # Endpoint URL
         generation_url = "https://cloud.leonardo.ai/api/rest/v1/generations"
@@ -175,7 +177,7 @@ class LeonardoAIHandler(BaseMLEngine):
         # payload
         generation_payload = {
             "height": height,
-            "modelId": args['using']['model'],
+            "modelId": tmp_args['model'],
             "prompt": f"{prompts}",
             "width": width,
         }
@@ -185,7 +187,6 @@ class LeonardoAIHandler(BaseMLEngine):
         generation_data = response_generation.json()
 
         # Wait for 15 seconds
-
         time.sleep(15)
 
         # extract generationID from the response
@@ -200,12 +201,8 @@ class LeonardoAIHandler(BaseMLEngine):
 
         # extract URLs from the response
         generated_images = retrieve_data["generations_by_pk"]["generated_images"]
-        image_urls = [image["url"] for image in generated_images]
-
-        url_dicts = []
-
-        for url in image_urls:
-            url_dicts.append({'url': url})
+        # Optimized list comp directly
+        url_dicts = [{'url': image["url"]} for image in generated_images]
 
         img_urls = pd.DataFrame(url_dicts, columns=['url'])
         return img_urls
