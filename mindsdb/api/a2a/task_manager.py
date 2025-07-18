@@ -287,30 +287,36 @@ class AgentTaskManager(InMemoryTaskManager):
         self, request: Union[SendTaskRequest, SendTaskStreamingRequest]
     ) -> Union[None, JSONRPCResponse]:
         """Validate the request and return an error response if invalid."""
-        # Check if the request has the required parameters
-        if not hasattr(request, "params") or not request.params:
+
+        # Fast path: localize variables and use try/except to avoid repeated attribute lookups
+        try:
+            params = request.params
+            if not params:
+                raise AttributeError("Missing params")
+            message = params.message
+            if not message:
+                return JSONRPCResponse(
+                    id=request.id,
+                    error=InvalidRequestError(message="Missing message in params"),
+                )
+            metadata = message.metadata
+            if not metadata:
+                return JSONRPCResponse(
+                    id=request.id,
+                    error=InvalidRequestError(message="Missing metadata in message"),
+                )
+        except AttributeError as e:
+            msg = str(e)
+            # Only the first error can be AttributeError: Missing params
             return JSONRPCResponse(
-                id=request.id,
+                id=getattr(request, "id", None),
                 error=InvalidRequestError(message="Missing params"),
             )
 
-        # Check if the request has a message
-        if not hasattr(request.params, "message") or not request.params.message:
-            return JSONRPCResponse(
-                id=request.id,
-                error=InvalidRequestError(message="Missing message in params"),
-            )
-
-        # Check if the message has metadata
-        if not hasattr(request.params.message, "metadata") or not request.params.message.metadata:
-            return JSONRPCResponse(
-                id=request.id,
-                error=InvalidRequestError(message="Missing metadata in message"),
-            )
-
-        # Check if the agent name is provided in the metadata
-        metadata = request.params.message.metadata
-        agent_name = metadata.get("agent_name", metadata.get("agentName"))
+        # Fast agent name extraction
+        agent_name = metadata.get("agent_name")
+        if agent_name is None:
+            agent_name = metadata.get("agentName")
         if not agent_name:
             return JSONRPCResponse(
                 id=request.id,
