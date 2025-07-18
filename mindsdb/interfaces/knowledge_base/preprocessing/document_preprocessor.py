@@ -57,7 +57,7 @@ class DocumentPreprocessor:
 
     def _get_source(self) -> str:
         """Get the source identifier for this preprocessor"""
-        return self.__class__.__name__
+        return type(self).__name__
 
     def to_dataframe(self, chunks: List[ProcessedChunk]) -> pd.DataFrame:
         """Convert processed chunks to dataframe format"""
