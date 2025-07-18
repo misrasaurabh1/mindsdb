@@ -6,7 +6,6 @@ from mindsdb.api.executor.utilities.sql import query_df
 from mindsdb_sql_parser import ast
 from mindsdb_sql_parser.ast.base import ASTNode
 
-from mindsdb.integrations.utilities.query_traversal import query_traversal
 from mindsdb.utilities.config import config
 
 
@@ -101,45 +100,55 @@ def extract_comparison_conditions(binary_op: ASTNode, ignore_functions=False):
     """Extracts all simple comparison conditions that must be true from an AST node.
     Does NOT support 'or' conditions.
     """
+    # Use iterative DFS via stack for speed and to avoid recursion overhead
     conditions = []
+    stack = [binary_op]
+    ast_Binary = ast.BinaryOperation
+    ast_Between = ast.BetweenOperation
+    ast_Const = ast.Constant
+    ast_Ident = ast.Identifier
+    ast_Tuple = ast.Tuple
+    ast_Func = ast.Function
 
-    def _extract_comparison_conditions(node: ASTNode, **kwargs):
-        if isinstance(node, ast.BinaryOperation):
+    while stack:
+        node = stack.pop()
+        nodetype = type(node)
+        if nodetype is ast_Binary:
             op = node.op.lower()
             if op == "and":
-                # Want to separate individual conditions, not include 'and' as its own condition.
-                return
+                stack.extend(reversed(node.args))
+                continue
 
             arg1, arg2 = node.args
-            if ignore_functions and isinstance(arg1, ast.Function):
-                # handle lower/upper
-                if arg1.op.lower() in ("lower", "upper"):
-                    if isinstance(arg1.args[0], ast.Identifier):
-                        arg1 = arg1.args[0]
 
-            if not isinstance(arg1, ast.Identifier):
-                # Only support [identifier] =/</>/>=/<=/etc [constant] comparisons.
-                raise NotImplementedError(f"Not implemented arg1: {arg1}")
+            if ignore_functions and type(arg1) is ast_Func:
+                func = arg1
+                funcop = func.op.lower()
+                if funcop == "lower" or funcop == "upper":
+                    if type(func.args[0]) is ast_Ident:
+                        arg1 = func.args[0]
 
-            if isinstance(arg2, ast.Constant):
+            if type(arg1) is not ast_Ident:
+                raise NotImplementedError(f"Not implemented arg1: {arg1!r}")
+
+            if type(arg2) is ast_Const:
                 value = arg2.value
-            elif isinstance(arg2, ast.Tuple):
-                value = [i.value for i in arg2.items]
+            elif type(arg2) is ast_Tuple:
+                value = [item.value for item in arg2.items]
             else:
-                raise NotImplementedError(f"Not implemented arg2: {arg2}")
+                raise NotImplementedError(f"Not implemented arg2: {arg2!r}")
 
+            # Fast access .parts; guaranteed at this point
             conditions.append([op, arg1.parts[-1], value])
-        if isinstance(node, ast.BetweenOperation):
-            var, up, down = node.args
-            if not (
-                isinstance(var, ast.Identifier) and isinstance(up, ast.Constant) and isinstance(down, ast.Constant)
-            ):
-                raise NotImplementedError(f"Not implemented: {node}")
 
+        elif nodetype is ast_Between:
+            var, up, down = node.args
+            if not (type(var) is ast_Ident and type(up) is ast_Const and type(down) is ast_Const):
+                raise NotImplementedError(f"Not implemented: {node!r}")
             op = node.op.lower()
             conditions.append([op, var.parts[-1], (up.value, down.value)])
+        # Ignore other node types
 
-    query_traversal(binary_op, _extract_comparison_conditions)
     return conditions
 
 
