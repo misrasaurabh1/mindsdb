@@ -1,4 +1,3 @@
-import time
 from typing import Optional, List
 
 import duckdb
@@ -11,22 +10,22 @@ from mindsdb.utilities.render.sqlalchemy_render import SqlalchemyRender
 
 
 class DummyHandler(DatabaseHandler):
-    name = 'dummy_data'
+    name = "dummy_data"
 
     def __init__(self, **kwargs):
-        super().__init__('dummy_data')
+        super().__init__("dummy_data")
         self.db_path = None
 
-        args = kwargs.get('connection_data', {})
-        if 'db_path' in args:
-            self.db_path = args['db_path']
+        args = kwargs.get("connection_data", {})
+        if "db_path" in args:
+            self.db_path = args["db_path"]
 
     def connect(self):
         """Set up any connections required by the handler"""
         return self.db_path is not None
 
     def disconnect(self):
-        """ Close any existing connections"""
+        """Close any existing connections"""
         return
 
     def check_connection(self) -> HandlerStatusResponse:
@@ -49,7 +48,7 @@ class DummyHandler(DatabaseHandler):
         """
         con = duckdb.connect(self.db_path)
         if params is not None:
-            query = query.replace('%s', '?')
+            query = query.replace("%s", "?")
             cur = con.executemany(query, params)
             if cur.rowcount >= 0:
                 result_df = cur.fetchdf()
@@ -71,7 +70,7 @@ class DummyHandler(DatabaseHandler):
         Returns:
             HandlerResponse
         """
-        renderer = SqlalchemyRender('postgres')
+        renderer = SqlalchemyRender("postgres")
         query_str, params = renderer.get_exec_params(query, with_failback=True)
         return self.native_query(query_str, params)
 
@@ -81,10 +80,10 @@ class DummyHandler(DatabaseHandler):
         Returns:
             HandlerResponse: Names of the tables in the database
         """
-        q = 'SHOW TABLES;'
+        q = "SHOW TABLES;"
         result = self.native_query(q)
         df = result.data_frame
-        result.data_frame = df.rename(columns={df.columns[0]: 'table_name'})
+        result.data_frame = df.rename(columns={df.columns[0]: "table_name"})
         return result
 
     def get_columns(self, table_name: str) -> HandlerResponse:
@@ -96,12 +95,12 @@ class DummyHandler(DatabaseHandler):
         Returns:
             HandlerResponse: Details of the table.
         """
-        query = f'DESCRIBE {table_name};'
+        query = f"DESCRIBE {table_name};"
         return self.native_query(query)
 
     def subscribe(self, stop_event, callback, table_name, columns=None, **kwargs):
-
+        # Optimization: use stop_event.wait to allow early exit and reduce busy-waiting latency.
         while True:
             if stop_event.is_set():
                 return
-            time.sleep(0.3)
+            stop_event.wait(0.3)
