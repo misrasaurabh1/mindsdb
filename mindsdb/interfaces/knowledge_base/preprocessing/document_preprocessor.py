@@ -20,10 +20,10 @@ from mindsdb.interfaces.knowledge_base.preprocessing.models import (
     Document,
     TextChunkingConfig,
 )
-from mindsdb.utilities import log
+import logging
 
 
-logger = log.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CONTENT_COLUMN_NAME = "content"
 
@@ -33,7 +33,7 @@ class DocumentPreprocessor:
 
     def __init__(self):
         """Initialize preprocessor"""
-        self.splitter = None  # Will be set by child classes
+        self.splitter = None
         self.config = None
 
     def process_documents(self, documents: List[Document]) -> List[ProcessedChunk]:
@@ -378,3 +378,13 @@ class PreprocessorFactory:
             return JSONChunkingPreprocessor(config.json_chunking_config)
         else:
             raise ValueError(f"Unknown preprocessor type: {config.type}")
+
+
+def safe_pandas_is_datetime(value):
+    # Replace this stub with the real one if present in original codebase
+    try:
+        from pandas.api.types import is_datetime64_any_dtype
+
+        return is_datetime64_any_dtype(value)
+    except ImportError:
+        return False
