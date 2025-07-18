@@ -125,14 +125,12 @@ class MLEnginesTable(MdbTable):
     @classmethod
     def get_data(cls, session, inf_schema, **kwargs):
         integrations = inf_schema.integration_controller.get_all(show_secrets=session.show_secrets)
-        ml_integrations = {key: val for key, val in integrations.items() if val["type"] == "ml"}
-
+        # Combine filtering and data collection in one loop for efficiency.
         data = []
-        for _key, val in ml_integrations.items():
-            data.append([val["name"], val.get("engine"), to_json(val.get("connection_data"))])
-
-        df = pd.DataFrame(data, columns=cls.columns)
-        return df
+        for val in integrations.values():
+            if val.get("type") == "ml":
+                data.append([val["name"], val.get("engine"), to_json(val.get("connection_data"))])
+        return pd.DataFrame.from_records(data, columns=cls.columns)
 
 
 class HandlersTable(MdbTable):
