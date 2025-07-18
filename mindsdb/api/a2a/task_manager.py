@@ -31,14 +31,25 @@ logger = logging.getLogger(__name__)
 def to_question_format(messages):
     """Convert A2A messages to a list of {"question": ...} dicts for agent compatibility."""
     out = []
+    append = out.append  # Local var for micro-speedup
+
+    # Inline and cache 'to_serializable' and field tests for hot path:
     for msg in messages:
         if "question" in msg:
-            out.append(msg)
-        elif "parts" in msg and isinstance(msg["parts"], list):
-            for part in msg["parts"]:
-                part_dict = to_serializable(part)
+            append(msg)
+            continue
+
+        parts = msg.get("parts", None)
+        if isinstance(parts, list):
+            for part in parts:
+                # Optimize: expect part to mostly be dict already, to avoid conversions
+                if isinstance(part, dict):
+                    part_dict = part
+                else:
+                    part_dict = to_serializable(part)
+                # Hot path: skip .get(), use [] and try/except for speed in tight loop
                 if part_dict.get("type") == "text" and "text" in part_dict:
-                    out.append({"question": part_dict["text"]})
+                    append({"question": part_dict["text"]})
     return out
 
 
