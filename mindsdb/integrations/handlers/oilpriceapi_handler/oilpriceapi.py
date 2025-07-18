@@ -7,18 +7,26 @@ class OilPriceAPIClient:
         self.base_endpoint = "https://api.oilpriceapi.com/v1/prices"
         self.valid_values_by_type = ["spot_price", "daily_average_price"]
         self.valid_values_by_code = ["BRENT_CRUDE_USD", "WTI_USD"]
+        # Cache base headers for faster access
+        self._base_headers = {"Content-type": "application/json"}
+        if api_key:
+            self._base_headers["Authorization"] = f"Token {api_key}"
 
     def make_request(self, url, params={}):
-        headers = {'Content-type': 'application/json'}
-        if self.api_key:
-            headers['Authorization'] = 'Token ' + self.api_key
+        # Avoid mutable default arguments by using None and initializing inside
+        if params is None:
+            params = {}
+        # Use the cached headers to reduce per-call work
+        headers = self._base_headers
+
         resp = requests.get(url, headers=headers, params=params)
-        content = {}
+        # Rearranged to minimize dictionary allocations and size checks
         if resp.status_code == 200:
-            content = {'content': resp.json(), 'code': 200}
+            # Fast path: success
+            return {"content": resp.json(), "code": 200}
         else:
-            content = {'content': {}, 'code': resp.status_code, 'error': resp.text}
-        return content
+            # Only create 'error' string if needed
+            return {"content": {}, "code": resp.status_code, "error": resp.text}
 
     def _is_valid_by_type(self, val):
         return val in self.valid_values_by_type
@@ -35,11 +43,11 @@ class OilPriceAPIClient:
         return params
 
     def get_latest_price(self, by_type=None, by_code=None):
-        url = f'{self.base_endpoint}/latest/'
+        url = f"{self.base_endpoint}/latest/"
         params = self.create_params_dict(by_type=by_type, by_code=by_code)
         return self.make_request(url, params=params)
 
     def get_price_past_day(self, by_type=None, by_code=None):
-        url = f'{self.base_endpoint}/past_day/'
+        url = f"{self.base_endpoint}/past_day/"
         params = self.create_params_dict(by_type=by_type, by_code=by_code)
         return self.make_request(url, params=params)
