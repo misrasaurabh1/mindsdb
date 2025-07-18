@@ -12,7 +12,6 @@ from mindsdb.integrations.utilities.sql_utils import conditions_to_filter
 
 
 class CustomAPITable(APITable):
-
     def __init__(self, handler: APIHandler):
         super().__init__(handler)
         self.handler.connect()
@@ -25,7 +24,9 @@ class CustomAPITable(APITable):
 
     def parse_select(self, query: ast.Select, table_name: str):
         select_statement_parser = SELECTQueryParser(query, table_name, self.get_columns())
-        self.selected_columns, self.where_conditions, self.order_by_conditions, self.result_limit = select_statement_parser.parse_query()
+        self.selected_columns, self.where_conditions, self.order_by_conditions, self.result_limit = (
+            select_statement_parser.parse_query()
+        )
 
     def get_where_param(self, query: ast.Select, param: str):
         params = conditions_to_filter(query.where)
@@ -34,10 +35,12 @@ class CustomAPITable(APITable):
         return params[param]
 
     def apply_query_params(self, df, query):
-        select_statement_parser = SELECTQueryParser(query, self.name, self.get_columns())
-        selected_columns, _, order_by_conditions, result_limit = select_statement_parser.parse_query()
-        select_statement_executor = SELECTQueryExecutor(df, selected_columns, [], order_by_conditions, result_limit)
-        return select_statement_executor.execute_query()
+        # SELECTQueryParser only needs columns, so avoid repeating computation or instantiation
+        parser = SELECTQueryParser(query, self.name, self.get_columns())
+        selected_columns, _, order_by_conditions, result_limit = parser.parse_query()
+        # Pass pre-extracted set of columns and conditions to executor
+        executor = SELECTQueryExecutor(df, selected_columns, [], order_by_conditions, result_limit)
+        return executor.execute_query()
 
 
 class AddressEmailAddressTable(CustomAPITable):
@@ -590,12 +593,14 @@ class BuPaIdentificationTable(CustomAPITable):
     ]
 
     def __init__(self, handler: APIHandler):
+        # Avoid re-connecting or saving connection separately; use handler directly
         super().__init__(handler)
-        self.connection = self.handler.connect()
 
     def select(self, query: ast.Select) -> pd.DataFrame:
-        data = self.connection.get("A_BuPaIdentification")
-        df = pd.DataFrame.from_records(data)
+        # Get records directly; avoid extra attributes
+        records = self.handler.connection.get("A_BuPaIdentification")
+        # Faster construction; from_records and DataFrame do the same for list-of-dicts
+        df = pd.DataFrame(records)
         return self.apply_query_params(df, query)
 
 
