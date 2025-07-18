@@ -69,14 +69,15 @@ def get_model_params(model_params: dict, default_config_key: str):
     """
     Get model parameters by combining default config with user provided parameters.
     """
-    combined_model_params = copy.deepcopy(config.get(default_config_key, {}))
+    # Use shallow copy for speed. Deepcopy is excessive here (unless nested mutation elsewhere, which is not the case for param-dict update/merge).
+    combined_model_params = config.get(default_config_key, {}).copy()
 
     if model_params:
         if not isinstance(model_params, dict):
             raise ValueError("Model parameters must be passed as a JSON object")
-
         combined_model_params.update(model_params)
 
+    # Safe: .pop for key-removal is ok on our function-local dict
     combined_model_params.pop("use_default_llm", None)
 
     return combined_model_params
