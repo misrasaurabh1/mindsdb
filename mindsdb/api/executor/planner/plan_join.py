@@ -135,33 +135,37 @@ class PlanJoinTablesQuery:
         return join_step
 
     def resolve_table(self, table):
-        # gets integration for table and name to access to it
-        table = copy.deepcopy(table)
-        # get possible table aliases
+        # get possible table aliases without deepcopy
         aliases = []
         if table.alias is not None:
-            # to lowercase
-            parts = tuple(map(str.lower, table.alias.parts))
+            parts = tuple(p.lower() for p in table.alias.parts)
             aliases.append(parts)
         else:
-            for i in range(0, len(table.parts)):
-                parts = table.parts[i:]
-                parts = tuple(map(str.lower, parts))
-                aliases.append(parts)
+            lp = len(table.parts)
+            # Precompute lower-case for all parts once
+            lower_parts = [p.lower() for p in table.parts]
+            for i in range(lp):
+                aliases.append(tuple(lower_parts[i:]))
 
-        # try to use default namespace
+        # Do not mutate table.parts -- use a copy if popping first item
         integration = self.planner.default_namespace
+        sub_select = getattr(table, "sub_select", None)
+
+        # Only check for namespace if parts exist and this isn't a subselect
         if len(table.parts) > 0:
-            if table.parts[0] in self.planner.databases:
-                integration = table.parts.pop(0)
+            first_part = table.parts[0]
+            if first_part in self.planner.databases:
+                integration = first_part
+                table_parts = table.parts[1:]
             else:
-                integration = self.planner.default_namespace
+                table_parts = table.parts
+        else:
+            table_parts = table.parts
 
         if integration is None and not hasattr(table, "sub_select"):
             raise PlanningException(f"Database not found for: {table}")
 
-        sub_select = getattr(table, "sub_select", None)
-
+        # Create a lightweight TableInfo object with table_parts
         return TableInfo(integration, table, aliases, conditions=[], sub_select=sub_select)
 
     def get_table_for_column(self, column: Identifier):
