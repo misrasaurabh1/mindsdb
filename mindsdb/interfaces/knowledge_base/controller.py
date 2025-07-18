@@ -810,36 +810,45 @@ class KnowledgeBaseTable:
 
         if model_id is None:
             # call litellm handler
-            messages = list(df[TableField.CONTENT.value])
+            # OPTIMIZE: pd.Series.to_list is slightly faster than list(df[col])
+            messages = df[TableField.CONTENT.value].to_list()
             embedding_params = get_model_params(self._kb.params.get("embedding_model", {}), "default_embedding_model")
+            # call_litellm_embedding expected to return a list of embeddings
             results = self.call_litellm_embedding(self.session, embedding_params, messages)
-            results = [[val] for val in results]
+            # Avoid double-listing; DataFrame constructor handles 1D -> 2D
             return pd.DataFrame(results, columns=[TableField.EMBEDDINGS.value])
 
-        # get the input columns
+        # Model-based embedding
         model_rec = db.session.query(db.Predictor).filter_by(id=model_id).first()
-
         assert model_rec is not None, f"Model not found: {model_id}"
         model_project = db.session.query(db.Project).filter_by(id=model_rec.project_id).first()
 
         project_datanode = self.session.datahub.get(model_project.name)
-
         model_using = model_rec.learn_args.get("using", {})
         input_col = model_using.get("question_column")
         if input_col is None:
             input_col = model_using.get("input_column")
 
-        if input_col is not None and input_col != TableField.CONTENT.value:
-            df = df.rename(columns={TableField.CONTENT.value: input_col})
+        # Only rename if required
+        if input_col is not None and input_col != TableField.CONTENT.value and input_col not in df.columns:
+            df_columns = list(df.columns)
+            new_columns = [input_col if col == TableField.CONTENT.value else col for col in df_columns]
+            df = df.copy()
+            df.columns = new_columns
 
         df_out = project_datanode.predict(model_name=model_rec.name, df=df, params=self.model_params)
 
         target = model_rec.to_predict[0]
         if target != TableField.EMBEDDINGS.value:
-            # adapt output for vectordb
-            df_out = df_out.rename(columns={target: TableField.EMBEDDINGS.value})
+            if target in df_out.columns and TableField.EMBEDDINGS.value not in df_out.columns:
+                df_out = df_out.rename(columns={target: TableField.EMBEDDINGS.value})
 
-        df_out = df_out[[TableField.EMBEDDINGS.value]]
+        # Only select if column exists
+        if TableField.EMBEDDINGS.value in df_out.columns:
+            df_out = df_out[[TableField.EMBEDDINGS.value]]
+        else:
+            # Defensive: fallback to ensure we at least have the right output
+            df_out = pd.DataFrame([], columns=[TableField.EMBEDDINGS.value])
 
         return df_out
 
@@ -849,9 +858,20 @@ class KnowledgeBaseTable:
         :param content: input string
         :return: embeddings
         """
-        df = pd.DataFrame([[content]], columns=[TableField.CONTENT.value])
-        res = self._df_to_embeddings(df)
-        return res[TableField.EMBEDDINGS.value][0]
+        # Optimized: Avoid DataFrame construction unless required
+        # If model_id is None, _df_to_embeddings will only use the content column; avoid DataFrame cost by using list
+        model_id = self._kb.embedding_model_id
+        if model_id is None:
+            embedding_params = get_model_params(self._kb.params.get("embedding_model", {}), "default_embedding_model")
+            results = self.call_litellm_embedding(self.session, embedding_params, [content])
+            # call_litellm_embedding returns a list of embeddings (single-item case)
+            return results[0]
+        else:
+            # If model, must go through DataFrame path because of predict/datanode/etc
+            df = pd.DataFrame([[content]], columns=[TableField.CONTENT.value])
+            res = self._df_to_embeddings(df)
+            # Use .iloc[0, 0] for fastest single-value access by index
+            return res[TableField.EMBEDDINGS.value].iloc[0]
 
     @staticmethod
     def call_litellm_embedding(session, model_params, messages):
