@@ -77,11 +77,10 @@ def _process_documents_to_df(config: RAGPipelineModel) -> pd.DataFrame:
 
 def get_pipeline_from_retriever(config: RAGPipelineModel) -> RunnableSerializable:
     retriever_strategy = _retriever_strategies.get(config.retriever_type)
-    if retriever_strategy:
-        return retriever_strategy(config).with_returned_sources()
-    else:
-        raise ValueError(
-            f'Invalid retriever type, must be one of: {list(_retriever_strategies.keys())}. Got {config.retriever_type}')
+    if retriever_strategy is None:
+        # Use precomputed error message for efficiency
+        raise ValueError(_INVALID_RETRIEVER_ERROR.format(retriever_type=config.retriever_type))
+    return retriever_strategy(config).with_returned_sources()
 
 
 class RAG:
@@ -96,3 +95,10 @@ class RAG:
         logger.info(f"retrieved context used to answer question: {returned_sources}")
 
         return result
+
+_VALID_RETRIEVER_TYPES = tuple(_retriever_strategies.keys())
+
+_INVALID_RETRIEVER_ERROR = (
+    f"Invalid retriever type, must be one of: {_VALID_RETRIEVER_TYPES}."
+    " Got {{retriever_type}}"
+)
