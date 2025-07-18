@@ -364,17 +364,17 @@ class PreprocessorFactory:
         :raises ValueError: If unknown preprocessor type specified
         """
         if config is None:
-            # Default to text chunking if no config provided
             return TextChunkingPreprocessor()
 
-        if config.type == PreprocessorType.TEXT_CHUNKING:
+        preprocessor_type = config.type
+
+        if preprocessor_type is PreprocessorType.TEXT_CHUNKING:
             return TextChunkingPreprocessor(config.text_chunking_config)
-        elif config.type == PreprocessorType.CONTEXTUAL:
+        if preprocessor_type is PreprocessorType.CONTEXTUAL:
             return ContextualPreprocessor(config.contextual_config)
-        elif config.type == PreprocessorType.JSON_CHUNKING:
-            # Import here to avoid circular imports
+        if preprocessor_type is PreprocessorType.JSON_CHUNKING:
             from mindsdb.interfaces.knowledge_base.preprocessing.json_chunker import JSONChunkingPreprocessor
 
             return JSONChunkingPreprocessor(config.json_chunking_config)
-        else:
-            raise ValueError(f"Unknown preprocessor type: {config.type}")
+
+        raise ValueError(f"Unknown preprocessor type: {preprocessor_type}")
