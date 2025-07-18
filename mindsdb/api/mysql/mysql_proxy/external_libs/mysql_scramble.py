@@ -28,9 +28,9 @@ import struct
 import io
 import sys
 
-PYPY = hasattr(sys, 'pypy_translation_info')
-JYTHON = sys.platform.startswith('java')
-IRONPYTHON = sys.platform == 'cli'
+PYPY = hasattr(sys, "pypy_translation_info")
+JYTHON = sys.platform.startswith("java")
+IRONPYTHON = sys.platform == "cli"
 CPYTHON = not PYPY and not JYTHON and not IRONPYTHON
 
 range_type = range
@@ -39,28 +39,24 @@ long_type = int
 str_type = str
 unichr = chr
 
-sha_new = partial(hashlib.new, 'sha1')
+sha_new = partial(hashlib.new, "sha1")
 
 
 def scramble(password, message):
     SCRAMBLE_LENGTH = 20
-    stage1 = sha_new(password.encode('utf-8')).digest()
+    stage1 = sha_new(password.encode("utf-8")).digest()
     stage2 = sha_new(stage1).digest()
     s = sha_new()
-    s.update(message[:SCRAMBLE_LENGTH].encode('utf-8'))
+    s.update(message[:SCRAMBLE_LENGTH].encode("utf-8"))
     s.update(stage2)
     result = s.digest()
     return _my_crypt(result, stage1)
 
 
 def _my_crypt(message1, message2):
-    length = len(message1)
-    result = b''
-    for i in range_type(length):
-        x = (struct.unpack('B', message1[i:i + 1])[0]
-             ^ struct.unpack('B', message2[i:i + 1])[0])
-        result += struct.pack('B', x)
-    return result
+    # Optimize: use direct bytes XOR, no struct or manual concatenation
+    # len(message1)==len(message2)
+    return bytes([b1 ^ b2 for b1, b2 in zip(message1, message2)])
 
 
 # old_passwords support ported from libmysql/password.c
@@ -85,8 +81,7 @@ def scramble_323(password, message):
     hash_pass_n = struct.unpack(">LL", hash_pass)
     hash_message_n = struct.unpack(">LL", hash_message)
 
-    rand_st = RandStruct_323(hash_pass_n[0] ^ hash_message_n[0],
-                             hash_pass_n[1] ^ hash_message_n[1])
+    rand_st = RandStruct_323(hash_pass_n[0] ^ hash_message_n[0], hash_pass_n[1] ^ hash_message_n[1])
     outbuf = io.BytesIO()
     for _ in range_type(min(SCRAMBLE_LENGTH_323, len(message))):
         outbuf.write(int2byte(int(rand_st.my_rnd() * 31) + 64))
@@ -104,7 +99,7 @@ def _hash_password_323(password):
     nr2 = 0x12345671
 
     # x in py3 is numbers, p27 is chars
-    for c in [byte2int(x) for x in password if x not in (' ', '\t', 32, 9)]:
+    for c in [byte2int(x) for x in password if x not in (" ", "\t", 32, 9)]:
         nr ^= (((nr & 63) + add) * c) + (nr << 8) & 0xFFFFFFFF
         nr2 = (nr2 + ((nr2 << 8) ^ nr)) & 0xFFFFFFFF
         add = (add + c) & 0xFFFFFFFF
