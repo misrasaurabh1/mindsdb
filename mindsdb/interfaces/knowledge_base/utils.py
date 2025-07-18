@@ -1,5 +1,7 @@
 """Utilities for knowledge base operations."""
+
 import hashlib
+from functools import lru_cache
 
 
 def generate_document_id(content: str, content_column: str = None, provided_id: str = None) -> str:
@@ -18,6 +20,12 @@ def generate_document_id(content: str, content_column: str = None, provided_id: 
     if provided_id is not None:
         return provided_id
 
-    # Generate a shorter 16-character hash based only on content
-    hash_obj = hashlib.md5(content.encode())
-    return hash_obj.hexdigest()[:16]
+    # Generate a shorter 16-character hash based only on content, caching for speed
+    return _short_md5_digest(content)
+
+
+@lru_cache(maxsize=8192)
+def _short_md5_digest(text: str) -> str:
+    # Use utf-8 encoding with surrogatepass for fastest encode & allow edge unicode
+    md5 = hashlib.md5(text.encode("utf-8", "surrogatepass"))
+    return md5.hexdigest()[:16]
