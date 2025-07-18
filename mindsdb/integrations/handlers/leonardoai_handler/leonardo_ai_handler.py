@@ -151,63 +151,61 @@ class LeonardoAIHandler(BaseMLEngine):
             - POST request will take couple of seconds to generate the picture, till then the process will be kept busy with a simple math calculation.
             - New GET request with the `generation_id` will fetch the generated pictures as URLs
         """
-        args = self.model_storage.json_get('args')
-        tmp_args = args['using']
-        height = tmp_args.get('height', 512)
-        width = tmp_args.get('width', 512)
-        api_key = self._get_leonardo_api_key(args, self.engine_storage)  # fetch API key
-        generation_id = ''
 
-        # Endpoint URL
-        generation_url = "https://cloud.leonardo.ai/api/rest/v1/generations"
+        # Get model arguments
+        args = self.model_storage.json_get('args')
+        using = args['using']
+
+        height = using.get('height', 512)
+        width = using.get('width', 512)
+        model_id = using['model']
+        api_key = self._get_leonardo_api_key(args, self.engine_storage)
+
+        # Pre-create auth strings to eliminate double f-string overhead
+        auth_value = f"Bearer {api_key}"
 
         post_headers = {
             "accept": "application/json",
             "content-type": "application/json",
-            "authorization": f"Bearer {api_key}"
+            "authorization": auth_value
         }
 
         get_headers = {
             "accept": "application/json",
-            "authorization": f"Bearer {api_key}"
+            "authorization": auth_value
         }
 
-        # payload
         generation_payload = {
             "height": height,
-            "modelId": args['using']['model'],
-            "prompt": f"{prompts}",
+            "modelId": model_id,
+            "prompt": str(prompts),
             "width": width,
         }
 
-        # Make a POST request to generate the image
-        response_generation = requests.post(generation_url, json=generation_payload, headers=post_headers)
+        generation_url = "https://cloud.leonardo.ai/api/rest/v1/generations"
+
+        response_generation = requests.post(
+            generation_url, json=generation_payload, headers=post_headers
+        )
         generation_data = response_generation.json()
 
-        # Wait for 15 seconds
-
+        # Wait for the image to be generated (API contract)
         time.sleep(15)
 
-        # extract generationID from the response
         generation_id = generation_data['sdGenerationJob']['generationId']
 
-        # ENDPOINT GET URL
         retrieve_url = f"https://cloud.leonardo.ai/api/rest/v1/generations/{generation_id}"
 
-        # GET request to retrieve image URLs
         response_retrieve = requests.get(retrieve_url, headers=get_headers)
         retrieve_data = response_retrieve.json()
 
-        # extract URLs from the response
         generated_images = retrieve_data["generations_by_pk"]["generated_images"]
-        image_urls = [image["url"] for image in generated_images]
 
-        url_dicts = []
+        # Use list comprehension of dicts directly for DataFrame, this is much faster
+        url_dicts = [{'url': image["url"]} for image in generated_images]
 
-        for url in image_urls:
-            url_dicts.append({'url': url})
-
-        img_urls = pd.DataFrame(url_dicts, columns=['url'])
+        # Construct DataFrame all at once; no iteration
+        img_urls = pd.DataFrame.from_records(url_dicts, columns=['url'])
         return img_urls
 
     def describe(self, attribute: Optional[str] = None) -> pd.DataFrame:
