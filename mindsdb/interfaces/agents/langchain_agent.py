@@ -67,6 +67,7 @@ from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 
 from mindsdb.utilities.langfuse import LangfuseClientWrapper
+from mindsdb.utilities.config import Config
 
 _PARSING_ERROR_PREFIXES = [
     "An output parsing error occurred",
@@ -78,25 +79,25 @@ logger = log.getLogger(__name__)
 
 def get_llm_provider(args: Dict) -> str:
     # If provider is explicitly specified, use that
-    if "provider" in args:
-        return args["provider"]
+    provider = args.get("provider")
+    if provider:
+        return provider
 
-    # Check for known model names from other providers first
-    if args["model_name"] in ANTHROPIC_CHAT_MODELS:
+    model_name = args["model_name"]
+    # Do fast checks for known models
+    if model_name in ANTHROPIC_CHAT_MODELS:
         return "anthropic"
-    if args["model_name"] in OPEN_AI_CHAT_MODELS:
+    elif model_name in OPEN_AI_CHAT_MODELS:
         return "openai"
-    if args["model_name"] in OLLAMA_CHAT_MODELS:
+    elif model_name in OLLAMA_CHAT_MODELS:
         return "ollama"
-    if args["model_name"] in NVIDIA_NIM_CHAT_MODELS:
+    elif model_name in NVIDIA_NIM_CHAT_MODELS:
         return "nvidia_nim"
-    if args["model_name"] in GOOGLE_GEMINI_CHAT_MODELS:
+    elif model_name in GOOGLE_GEMINI_CHAT_MODELS:
         return "google"
-    # Check for writer models
-    if args["model_name"] in WRITER_CHAT_MODELS:
+    elif model_name in WRITER_CHAT_MODELS:
         return "writer"
 
-    # For vLLM, require explicit provider specification
     raise ValueError("Invalid model name. Please define a supported llm provider")
 
 
@@ -137,15 +138,22 @@ def get_embedding_model_provider(args: Dict) -> str:
 
 
 def get_chat_model_params(args: Dict) -> Dict:
+    # Only copy if we mutate input
     model_config = args.copy()
-    # Include API keys.
-    model_config["api_keys"] = {p: get_api_key(p, model_config, None, strict=False) for p in SUPPORTED_PROVIDERS}
-    llm_config = get_llm_config(args.get("provider", get_llm_provider(args)), model_config)
+    # Bulk get all API keys: use precomputed SUPPORTED_PROVIDERS list
+    api_keys_dict = {}
+    # Avoid repeated fastpath get_api_key when not needed
+    for p in SUPPORTED_PROVIDERS:
+        api_keys_dict[p] = get_api_key(p, model_config, None, strict=False)
+    model_config["api_keys"] = api_keys_dict
+    provider = args.get("provider", get_llm_provider(args))
+    llm_config = get_llm_config(provider, model_config)
     config_dict = llm_config.model_dump(by_alias=True)
+    # Avoid non-None dict comprehension if many may be None
     config_dict = {k: v for k, v in config_dict.items() if v is not None}
 
     # If provider is writer, ensure the API key is passed as 'api_key'
-    if args.get("provider") == "writer" and "writer_api_key" in config_dict:
+    if provider == "writer" and "writer_api_key" in config_dict:
         config_dict["api_key"] = config_dict.pop("writer_api_key")
 
     return config_dict
@@ -225,6 +233,25 @@ def process_chunk(chunk):
         return chunk
     else:
         return str(chunk)
+
+
+def _get_config_instance():
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance
+
+
+def _get_config_api_key(api_name):
+    # Get/cached config[api_name] lookup
+    key = api_name.lower()
+    if key in _config_api_keys:
+        return _config_api_keys[key]
+    config = _get_config_instance()
+    api_cfg = config.get(api_name, {})
+    api_key = api_cfg.get(f"{key}_api_key")
+    _config_api_keys[key] = api_key
+    return api_key
 
 
 class LangchainAgent:
@@ -728,3 +755,8 @@ AI: {response}"""
         if isinstance(chunk, (str, int, float, bool, type(None))):
             return chunk
         return str(chunk)
+
+
+_config_instance = None
+
+_config_api_keys = {}

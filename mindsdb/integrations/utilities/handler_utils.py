@@ -31,65 +31,65 @@ def get_api_key(
         4. api key env variable
         5. api_key setting in config.json
     """
-    # Special case for vLLM - always return dummy key
-    if api_name == "vllm":
+    lname = api_name.lower()
+
+    if lname == "vllm":
         return "EMPTY"
 
-    # 1
-    if "using" in create_args and f"{api_name.lower()}_api_key" in create_args["using"]:
-        return create_args["using"][f"{api_name.lower()}_api_key"]
+    using = create_args.get("using")
+    if using:
+        # 1, 1.5
+        key1 = f"{lname}_api_key"
+        if key1 in using:
+            return using[key1]
+        if "api_key" in using:
+            return using["api_key"]
 
-    # 1.5 - Check for generic api_key in using
-    if "using" in create_args and "api_key" in create_args["using"]:
-        return create_args["using"]["api_key"]
-
-    # 2
-    if f"{api_name.lower()}_api_key" in create_args:
-        return create_args[f"{api_name.lower()}_api_key"]
-
-    # 2.5 - Check for generic api_key
+    # 2, 2.5
+    key2 = f"{lname}_api_key"
+    if key2 in create_args:
+        return create_args[key2]
     if "api_key" in create_args:
         return create_args["api_key"]
 
-    # 3 - Check in params dictionary if it exists (for agents)
-    if "params" in create_args and create_args["params"] is not None:
-        if f"{api_name.lower()}_api_key" in create_args["params"]:
-            return create_args["params"][f"{api_name.lower()}_api_key"]
-        # 3.5 - Check for generic api_key in params
-        if "api_key" in create_args["params"]:
-            return create_args["params"]["api_key"]
+    # 3, 3.5
+    params = create_args.get("params")
+    if params:
+        if key2 in params:
+            return params[key2]
+        if "api_key" in params:
+            return params["api_key"]
 
-    # 4
+    # 4, 4.5
     if engine_storage is not None:
         connection_args = engine_storage.get_connection_args()
-        if f"{api_name.lower()}_api_key" in connection_args:
-            return connection_args[f"{api_name.lower()}_api_key"]
-        # 4.5 - Check for generic api_key in connection_args
+        if key2 in connection_args:
+            return connection_args[key2]
         if "api_key" in connection_args:
             return connection_args["api_key"]
 
-    # 5
-    api_key = os.getenv(f"{api_name.lower()}_api_key")
-    if api_key is not None:
+    # 5. Try lower and upper envvars in one pass for best performance
+    env_key = f"{lname}_api_key"
+    env = os.environ
+    api_key = env.get(env_key) or env.get(f"{api_name.upper()}_API_KEY")
+    if api_key:
         return api_key
-    api_key = os.getenv(f"{api_name.upper()}_API_KEY")
-    if api_key is not None:
+
+    # 6: config singleton/cached key
+    api_key = _get_config_api_key(api_name)
+    if api_key:
         return api_key
 
-    # 6
-    config = Config()
-    api_cfg = config.get(api_name, {})
-    if f"{api_name.lower()}_api_key" in api_cfg:
-        return api_cfg[f"{api_name.lower()}_api_key"]
+    # 7: create_args["api_keys"] mapping
+    api_keys = create_args.get("api_keys")
+    if api_keys and api_name in api_keys:
+        return api_keys[api_name]
 
-    # 7
-    if "api_keys" in create_args and api_name in create_args["api_keys"]:
-        return create_args["api_keys"][api_name]
-
+    # Strict handling & error
     if strict:
         provider_upper = api_name.upper()
         api_key_env_var = f"{provider_upper}_API_KEY"
-        api_key_arg = f"{api_name.lower()}_api_key"
+        api_key_arg = f"{lname}_api_key"
         error_message = (
             f"API key for {api_name} not found. Please provide it using one of the following methods:\n"
             f"1. Set the {api_key_env_var} environment variable\n"
@@ -99,3 +99,27 @@ def get_api_key(
         )
         raise Exception(error_message)
     return None
+
+
+def _get_config_instance():
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance
+
+
+def _get_config_api_key(api_name):
+    # Get/cached config[api_name] lookup
+    key = api_name.lower()
+    if key in _config_api_keys:
+        return _config_api_keys[key]
+    config = _get_config_instance()
+    api_cfg = config.get(api_name, {})
+    api_key = api_cfg.get(f"{key}_api_key")
+    _config_api_keys[key] = api_key
+    return api_key
+
+
+_config_instance = None
+
+_config_api_keys = {}
