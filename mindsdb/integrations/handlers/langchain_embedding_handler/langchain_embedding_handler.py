@@ -11,6 +11,7 @@ from mindsdb.utilities import log
 from langchain_core.embeddings import Embeddings
 from mindsdb.integrations.handlers.langchain_embedding_handler.vllm_embeddings import VLLMEmbeddings
 from mindsdb.integrations.handlers.langchain_embedding_handler.fastapi_embeddings import FastAPIEmbeddings
+from threading import Lock
 
 logger = log.getLogger(__name__)
 
@@ -20,11 +21,10 @@ logger = log.getLogger(__name__)
 # E.g. OpenAIEmbeddings -> OpenAI
 # This is used for the user to select the embedding model
 EMBEDDING_MODELS = {
-    'VLLM': 'VLLMEmbeddings',
-    'vllm': 'VLLMEmbeddings',
-    'FastAPI': 'FastAPIEmbeddings',
-    'fastapi': 'FastAPIEmbeddings'
-
+    "VLLM": "VLLMEmbeddings",
+    "vllm": "VLLMEmbeddings",
+    "FastAPI": "FastAPIEmbeddings",
+    "fastapi": "FastAPIEmbeddings",
 }
 
 try:
@@ -41,9 +41,7 @@ try:
         EMBEDDING_MODELS[user_friendly_name.lower()] = class_name
 
 except ImportError:
-    raise Exception(
-        "The langchain is not installed. Please install it with `pip install langchain-community`."
-    )
+    raise Exception("The langchain is not installed. Please install it with `pip install langchain-community`.")
 
 
 def get_langchain_class(class_name: str) -> Embeddings:
@@ -55,26 +53,44 @@ def get_langchain_class(class_name: str) -> Embeddings:
     Returns:
         langchain.embeddings.BaseEmbedding: The class object
     """
-    # First check if it's our custom VLLMEmbeddings
+    # Fast path for custom handlers
     if class_name == "VLLMEmbeddings":
         return VLLMEmbeddings
 
     if class_name == "FastAPIEmbeddings":
         return FastAPIEmbeddings
 
-    # Then try langchain_community.embeddings
-    try:
-        module = importlib.import_module("langchain_community.embeddings")
-        class_ = getattr(module, class_name)
-    except ImportError:
-        raise Exception(
-            "The langchain is not installed. Please install it with `pip install langchain`."
-        )
-    except AttributeError:
+    # Check cache for successful and unsuccessful lookups
+    if class_name in _langchain_class_cache:
+        return _langchain_class_cache[class_name]
+    if class_name in _langchain_class_notfound:
         raise Exception(
             f"Could not find the class {class_name} in langchain_community.embeddings. Please check the class name."
         )
-    return class_
+
+    # Only import and cache the module once for all requests (thread safe)
+    global _langchain_community_embeddings_module
+    if _langchain_community_embeddings_module is None:
+        with _langchain_community_lock:
+            if _langchain_community_embeddings_module is None:
+                try:
+                    _langchain_community_embeddings_module = importlib.import_module("langchain_community.embeddings")
+                except ImportError:
+                    raise Exception(
+                        "The langchain is not installed. Please install it with `pip install langchain-community`."
+                    )
+
+    # Attempt to get class; cache success or failure
+    module = _langchain_community_embeddings_module
+    try:
+        class_ = getattr(module, class_name)
+        _langchain_class_cache[class_name] = class_  # cache valid class
+        return class_
+    except AttributeError:
+        _langchain_class_notfound.add(class_name)
+        raise Exception(
+            f"Could not find the class {class_name} in langchain_community.embeddings. Please check the class name."
+        )
 
 
 def construct_model_from_args(args: Dict) -> Embeddings:
@@ -84,18 +100,14 @@ def construct_model_from_args(args: Dict) -> Embeddings:
     target = args.pop("target", None)
     class_name = args.pop("class", LangchainEmbeddingHandler.DEFAULT_EMBEDDING_CLASS)
     if class_name in EMBEDDING_MODELS:
-        logger.info(
-            f"Mapping the user friendly name {class_name} to the class name: {EMBEDDING_MODELS[class_name]}"
-        )
+        logger.info(f"Mapping the user friendly name {class_name} to the class name: {EMBEDDING_MODELS[class_name]}")
         class_name = EMBEDDING_MODELS[class_name]
     MODEL_CLASS = get_langchain_class(class_name)
     serialized_dict = copy.deepcopy(args)
 
     # Make sure we don't pass in unnecessary arguments.
     if issubclass(MODEL_CLASS, BaseModel):
-        serialized_dict = {
-            k: v for k, v in serialized_dict.items() if k in MODEL_CLASS.model_fields
-        }
+        serialized_dict = {k: v for k, v in serialized_dict.items() if k in MODEL_CLASS.model_fields}
 
     model = MODEL_CLASS(**serialized_dict)
     if target is not None:
@@ -114,9 +126,7 @@ def row_to_document(row: pd.Series) -> str:
     """
     fields = row.index.tolist()
     values = row.values.tolist()
-    document = "\n".join(
-        [f"{field}: {value}" for field, value in zip(fields, values)]
-    )
+    document = "\n".join([f"{field}: {value}" for field, value in zip(fields, values)])
     return document
 
 
@@ -146,14 +156,10 @@ class LangchainEmbeddingHandler(BaseMLEngine):
             # ignore private columns starts with __mindsdb
             # ignore target column in the input dataframe
             user_args["input_columns"] = [
-                col
-                for col in df.columns.tolist()
-                if not col.startswith("__mindsdb") and col != target
+                col for col in df.columns.tolist() if not col.startswith("__mindsdb") and col != target
             ]
             # unquote the column names -- removing surrounding `
-            user_args["input_columns"] = [
-                col.strip("`") for col in user_args["input_columns"]
-            ]
+            user_args["input_columns"] = [col.strip("`") for col in user_args["input_columns"]]
 
         elif "input_columns" not in user_args:
             # set as empty list if the input_columns is not provided
@@ -167,9 +173,7 @@ class LangchainEmbeddingHandler(BaseMLEngine):
 
         # save the model to the model storage
         target = target or "embeddings"
-        user_args[
-            "target"
-        ] = target  # this is the name of the column to store the embeddings
+        user_args["target"] = target  # this is the name of the column to store the embeddings
         self.model_storage.json_set("args", user_args)
 
     def predict(self, df: DataFrame, args) -> DataFrame:
@@ -204,12 +208,8 @@ class LangchainEmbeddingHandler(BaseMLEngine):
 
         return df_embeddings
 
-    def finetune(
-        self, df: Union[DataFrame, None] = None, args: Union[Dict, None] = None
-    ) -> None:
-        raise NotImplementedError(
-            "Finetuning is not supported for langchain embeddings"
-        )
+    def finetune(self, df: Union[DataFrame, None] = None, args: Union[Dict, None] = None) -> None:
+        raise NotImplementedError("Finetuning is not supported for langchain embeddings")
 
     def describe(self, attribute: Union[str, None] = None) -> DataFrame:
         args = self.model_storage.json_get("args")
@@ -227,3 +227,12 @@ class LangchainEmbeddingHandler(BaseMLEngine):
         else:
             tables = ("args", "metadata")
             return pd.DataFrame(tables, columns=["tables"])
+
+
+_langchain_community_embeddings_module = None
+
+_langchain_community_lock = Lock()
+
+_langchain_class_cache = {}
+
+_langchain_class_notfound = set()
