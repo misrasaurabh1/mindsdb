@@ -159,9 +159,10 @@ class KnowledgeBaseTable:
         self.document_loader = None
         self.model_params = None
 
-        self.kb_to_vector_columns = {"id": "_original_doc_id", "chunk_id": "id", "chunk_content": "content"}
-        if self._kb.params.get("version", 0) < 2:
-            self.kb_to_vector_columns["id"] = "original_doc_id"
+        version = self._kb.params.get("version", 0)
+        # Build mapping dict directly, avoiding unnecessary mutation
+        id_column = "original_doc_id" if version < 2 else "_original_doc_id"
+        self.kb_to_vector_columns = {"id": id_column, "chunk_id": "id", "chunk_content": "content"}
 
     def configure_preprocessing(self, config: Optional[dict] = None):
         """Configure preprocessing for the knowledge base table"""
