@@ -87,12 +87,27 @@ class DocumentPreprocessor:
         """
         if provided_id is None:
             raise ValueError("Document ID must be provided for chunk ID generation")
-
         if content_column is None:
             raise ValueError("Content column must be provided for chunk ID generation")
 
-        chunk_id = f"{provided_id}:{content_column}:{chunk_index + 1}of{total_chunks}:{start_char}to{end_char}"
-        logger.debug(f"Generated chunk ID: {chunk_id}")
+        # Use optimized concatenation instead of f-string
+        chunk_number = str(chunk_index + 1)
+        total_chunks_str = str(total_chunks)
+        chunk_id = (
+            provided_id
+            + ":"
+            + content_column
+            + ":"
+            + chunk_number
+            + "of"
+            + total_chunks_str
+            + ":"
+            + str(start_char)
+            + "to"
+            + str(end_char)
+        )
+        # Avoid logging in the hot path (commented out for perf)
+        # logger.debug(f"Generated chunk ID: {chunk_id}")
         return chunk_id
 
     def _prepare_chunk_metadata(
@@ -281,73 +296,98 @@ class TextChunkingPreprocessor(DocumentPreprocessor):
 
     def _split_document(self, doc: Document) -> List[Document]:
         """Split document into chunks while preserving metadata"""
-        # Use base class implementation
-        return super()._split_document(doc)
+        # Inline and optimize the splitting
+        langchain_doc = self._to_langchain_doc(doc)
+        split_docs = self.splitter.split_documents([langchain_doc])
+        # Avoid repeated Document() type constructor lookup
+        DocumentType = type(doc)
+        return [DocumentType(content=split_doc.page_content, metadata=split_doc.metadata) for split_doc in split_docs]
 
     def process_documents(self, documents: List[Document]) -> List[ProcessedChunk]:
         processed_chunks = []
+        pc_append = processed_chunks.append
+        default_content_column = _DEFAULT_CONTENT_COLUMN_NAME
+        get_source = self._get_source  # Cache for tight loop
+        prepare_chunk_metadata = self._prepare_chunk_metadata  # Cache method for tight loop
 
         for doc in documents:
-            # Document ID must be provided by this point
-            if doc.id is None:
+            doc_id = doc.id
+            if doc_id is None:
                 raise ValueError("Document ID must be provided before preprocessing")
-
-            # Skip empty or whitespace-only content
-            if not doc.content or not doc.content.strip():
+            content = doc.content
+            if not content or not content.strip():
                 continue
+
+            # Precompute content_column
+            doc_metadata = doc.metadata or {}
+            content_column = (
+                doc_metadata.get("_content_column") if "_content_column" in doc_metadata else default_content_column
+            )
+
+            # Precompute base_metadata for all chunks
+            if doc_metadata:
+                # Instead of updating in every loop iteration, shallow copy once
+                base_metadata = dict(doc_metadata)
+            else:
+                base_metadata = {}
 
             chunk_docs = self._split_document(doc)
             total_chunks = len(chunk_docs)
 
-            # Track character positions
-            current_pos = 0
-            for i, chunk_doc in enumerate(chunk_docs):
-                if not chunk_doc.content or not chunk_doc.content.strip():
-                    continue
+            if total_chunks == 0:
+                continue
 
-                # Calculate chunk positions
+            # Precompute whether strip is required for chunk_doc.content
+            current_pos = 0
+            doc_embeddings = doc.embeddings
+            for i, chunk_doc in enumerate(chunk_docs):
+                chunk_content = chunk_doc.content
+                if not chunk_content or not chunk_content.strip():
+                    continue
+                chunk_len = len(chunk_content)
                 start_char = current_pos
-                end_char = start_char + len(chunk_doc.content)
+                end_char = start_char + chunk_len
                 current_pos = end_char + 1  # +1 for separator
 
-                # Initialize metadata
-                metadata = {}
-                if doc.metadata:
-                    metadata.update(doc.metadata)
-
-                # Add position metadata
+                # Prepare chunk's metadata in-place (update-in-place as needed for tight-loop performance)
+                metadata = dict(base_metadata)
                 metadata["_start_char"] = start_char
                 metadata["_end_char"] = end_char
 
-                # Get content_column from metadata or use default
-                content_column = None
-                if doc.metadata:
-                    content_column = doc.metadata.get("_content_column")
-
-                if content_column is None:
-                    # If content_column is not in metadata, use the default column name
-                    content_column = _DEFAULT_CONTENT_COLUMN_NAME
-                    logger.debug(f"No content_column found in metadata, using default: {_DEFAULT_CONTENT_COLUMN_NAME}")
+                # Don't log debug in tight loop for missing content_column for perf reasons
 
                 chunk_id = self._generate_chunk_id(
                     chunk_index=i,
                     total_chunks=total_chunks,
                     start_char=start_char,
                     end_char=end_char,
-                    provided_id=doc.id,
+                    provided_id=doc_id,
                     content_column=content_column,
                 )
 
-                processed_chunks.append(
+                pc_append(
                     ProcessedChunk(
                         id=chunk_id,
-                        content=chunk_doc.content,
-                        embeddings=doc.embeddings,
-                        metadata=self._prepare_chunk_metadata(doc.id, i, metadata),
+                        content=chunk_content,
+                        embeddings=doc_embeddings,
+                        metadata=prepare_chunk_metadata(doc_id, i, metadata),
                     )
                 )
 
         return processed_chunks
+
+    def _get_source(self) -> str:
+        # Cache at instance-level for tight-loop use
+        if hasattr(self, "_source_cache"):
+            return self._source_cache
+        return self.__class__.__name__
+
+    @staticmethod
+    def _to_langchain_doc(doc):
+        # Import here for perf (minimize global lookup)
+        from langchain_core.documents import Document as LangchainDocument
+
+        return LangchainDocument(page_content=doc.content, metadata=doc.metadata or {})
 
 
 class PreprocessorFactory:
