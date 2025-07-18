@@ -10,6 +10,8 @@ from mindsdb.integrations.utilities.rag.utils import documents_to_df
 from mindsdb.integrations.utilities.rag.retrievers.multi_hop_retriever import MultiHopRetriever
 from mindsdb.utilities.log import getLogger
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import functools
+from mindsdb.integrations.handlers.langchain_embedding_handler.langchain_embedding_handler import construct_model_from_args
 
 logger = getLogger(__name__)
 
@@ -82,6 +84,29 @@ def get_pipeline_from_retriever(config: RAGPipelineModel) -> RunnableSerializabl
     else:
         raise ValueError(
             f'Invalid retriever type, must be one of: {list(_retriever_strategies.keys())}. Got {config.retriever_type}')
+
+# Cache embeddings construction by keying on the id() of learn_args dict, which is a quick optimization.
+# As learn_args should not change, this is safe as long as references are not copied and mutated in-place.
+# This avoids redundant construct_model_from_args calls, which are expensive.
+
+def _embeddings_key(args):
+    # Immutable tuple key from items of dict if possible
+    # fallback to id(args) if not hashable
+    try:
+        return tuple(sorted(args.items()))
+    except Exception:
+        return id(args)
+
+@functools.lru_cache(maxsize=8)
+def _construct_embeddings_cached(args_tuple):
+    # args_tuple is (tuple or id), so we need to reconstruct kwargs.
+    # When tuple, it's pairs; when int, not hashable, so skip cache.
+    if isinstance(args_tuple, tuple):
+        args = dict(args_tuple)
+    else:
+        # Unlikely fallback; for safety, but no strong caching in this path
+        args = args_tuple
+    return construct_model_from_args(dict(args))
 
 
 class RAG:
