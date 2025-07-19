@@ -19,15 +19,16 @@ class Scram():
         self.snonce = base64.b64encode(os.urandom(24)).decode()
         self.iterations = 4096
         self.messages = []
-
         if method == 'sha1':
             self.method_str = 'sha1'
             self.method_func = hashlib.sha1
-            self.salt = base64.b64encode(os.urandom(16))
+            salt = os.urandom(16)
         elif method == 'sha256':
             self.method_str = 'sha256'
             self.method_func = hashlib.sha256
-            self.salt = base64.b64encode(os.urandom(28))
+            salt = os.urandom(28)
+        self.salt = base64.b64encode(salt)
+        self.salt_bytes = salt  # cache salt as bytes for fast access
 
     def process_client_first_message(self, payload):
         payload = payload[3:]
@@ -70,13 +71,15 @@ class Scram():
         return hmac.new(key, msg, digestmod=self.method_func).digest()
 
     def salt_password(self, user, password):
+        # Cache the password bytes on first access to avoid recomputation
         if self.method_str == 'sha1':
-            password = _password_digest(user, password).encode("utf-8")
-        elif self.method_str == 'sha256':
-            password = saslprep(password).encode("utf-8")
+            password_bytes = _password_digest(user, password).encode("utf-8")
+        else:  # self.method_str == 'sha256'
+            password_bytes = saslprep(password).encode("utf-8")
 
+        # Use pre-decoded salt bytes for pbkdf2_hmac
         return hashlib.pbkdf2_hmac(
-            self.method_str, password, base64.b64decode(self.salt), self.iterations
+            self.method_str, password_bytes, self.salt_bytes, self.iterations
         )
 
     def _split_payload(self, payload):
