@@ -119,21 +119,20 @@ class PreparedStatementPlanner:
 
     def get_table_of_column(self, t):
         tables_map = self.planner.statement.tables_map
+        t_parts = t.parts
 
-        # get tables to check
-        if len(t.parts) > 1:
-            # try to find table
-            table_parts = t.parts[:-1]
-            table_name = ".".join(table_parts)
+        # Only check if there are at least 2 parts
+        if len(t_parts) > 1:
+            # First candidate: try with all but last part
+            table_name = ".".join(t_parts[:-1])
             if table_name in tables_map:
                 return tables_map[table_name]
 
-            elif len(table_parts) > 1:
-                # maybe datasource is 1st part
-                table_parts = table_parts[1:]
-                table_name = ".".join(table_parts)
-                if table_name in tables_map:
-                    return tables_map[table_name]
+            # Second candidate: skip first part and use next-to-last
+            if len(t_parts) > 2:
+                table_name2 = ".".join(t_parts[1:-1])
+                if table_name2 in tables_map:
+                    return tables_map[table_name2]
 
     def table_from_identifier(self, table):
         # disambiguate
