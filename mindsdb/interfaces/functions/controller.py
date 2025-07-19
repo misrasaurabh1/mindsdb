@@ -1,9 +1,9 @@
 import os
-import copy
 
 from duckdb.typing import BIGINT, DOUBLE, VARCHAR, BLOB, BOOLEAN
 from mindsdb.interfaces.storage.model_fs import HandlerStorage
 from mindsdb.utilities.config import config
+import copy
 
 
 def python_to_duckdb_type(py_type):
@@ -115,16 +115,14 @@ class FunctionController(BYOMFunctionsController):
         super().__init__(*args, **kwargs)
 
     def check_function(self, node):
-        meta = super().check_function(node)
-        if meta is not None:
-            return meta
-
-        # builtin functions
-        if node.op.lower() == "llm":
+        # Fast-path builtin, avoid super() if possible
+        opname = node.op.lower()
+        if opname == "llm":
             return self.llm_call_function(node)
-
-        elif node.op.lower() == "to_markdown":
+        elif opname == "to_markdown":
             return self.to_markdown_call_function(node)
+        # Otherwise defer to superclass for standard BYOM handlers
+        return super().check_function(node)
 
     def llm_call_function(self, node):
         name = node.op.lower()
@@ -207,6 +205,42 @@ class FunctionController(BYOMFunctionsController):
             chat_model_params["api_keys"] = {chat_model_params["provider"]: chat_model_params["api_key"]}
 
         return chat_model_params
+
+    def _get_llm_imports(self):
+        # Use cached imports for LLM, only do actual import once
+        if self._create_chat_model is None or self._HumanMessage is None:
+            # Use thread lock to avoid double-import in parallel scenarios
+            with self._import_lock:
+                if self._create_chat_model is None or self._HumanMessage is None:
+                    from langchain_core.messages import HumanMessage
+                    from mindsdb.interfaces.agents.langchain_agent import create_chat_model
+
+                    FunctionController._HumanMessage = HumanMessage
+                    FunctionController._create_chat_model = create_chat_model
+        return self._create_chat_model, self._HumanMessage
+
+    def _get_to_markdown_class(self):
+        if self._to_markdown_class is None:
+            with self._import_lock:
+                if self._to_markdown_class is None:
+                    from mindsdb.interfaces.functions.to_markdown import ToMarkdown
+
+                    FunctionController._to_markdown_class = ToMarkdown
+        return self._to_markdown_class
+
+    def _prepare_chat_model_params_for_to_markdown(self, chat_model_params: dict) -> dict:
+        """
+        Prepares the chat model parameters for the ToMarkdown function.
+        Only copy relevant objects, avoid redundant deep copies.
+        """
+        # Only copy if shared downstream, else shallow copy and mutate
+        params_copy = dict(chat_model_params)
+        params_copy["model"] = params_copy.pop("model_name")
+        if params_copy.get("provider") == "google" and "base_url" not in params_copy:
+            params_copy["base_url"] = "https://generativelanguage.googleapis.com/v1beta/"
+        params_copy.pop("api_keys", None)
+        params_copy.pop("provider", None)
+        return params_copy
 
 
 class DuckDBFunctions:
