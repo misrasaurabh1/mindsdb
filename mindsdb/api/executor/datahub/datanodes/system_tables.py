@@ -58,9 +58,17 @@ class SchemataTable(Table):
     @classmethod
     def get_data(cls, inf_schema=None, **kwargs):
         databases_meta = inf_schema.session.database_controller.get_list()
-        data = [["def", x["name"], "utf8mb4", "utf8mb4_0900_ai_ci", None] for x in databases_meta]
-
-        df = pd.DataFrame(data, columns=cls.columns)
+        names = [x["name"] for x in databases_meta]
+        n = len(names)
+        df = pd.DataFrame(
+            {
+                "CATALOG_NAME": ["def"] * n,
+                "SCHEMA_NAME": names,
+                "DEFAULT_CHARACTER_SET_NAME": ["utf8mb4"] * n,
+                "DEFAULT_COLLATION_NAME": ["utf8mb4_0900_ai_ci"] * n,
+                "SQL_PATH": [None] * n,
+            }
+        )
         return df
 
 
