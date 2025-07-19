@@ -3,21 +3,24 @@ import base64
 from mindsdb.api.mongo.classes.scram import Scram
 
 
-class Session():
+class Session:
     def __init__(self, server_mindsdb_env):
-        self.config = server_mindsdb_env['config']
-        self.mindsdb_env = {'company_id': None}
+        self.config = server_mindsdb_env["config"]
+        self.mindsdb_env = {"company_id": None}
         self.mindsdb_env.update(server_mindsdb_env)
+        # Pre-fetch auth config for fast access
+        auth_cfg = self.config.get("auth", {})
+        self._real_user = auth_cfg.get("username", "")
+        self._password = auth_cfg.get("password", "")
 
     def init_scram(self, method):
         self.scram = Scram(method=method, get_salted_password=self.get_salted_password)
 
     def get_salted_password(self, username, method=None):
-        real_user = self.config['auth'].get('username', '')
-        password = self.config['auth'].get('password', '')
+        # Use pre-fetched user/password for speed
+        real_user = self._real_user
+        password = self._password
         if username != real_user:
-            raise Exception(f'Wrong username {username}')
-
+            raise Exception(f"Wrong username {username}")
         salted_password = self.scram.salt_password(real_user, password)
-
         return base64.b64decode(self.scram.salt), salted_password
