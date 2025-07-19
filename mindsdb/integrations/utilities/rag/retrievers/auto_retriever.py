@@ -20,17 +20,13 @@ class AutoRetriever(BaseRetriever):
 
     """
 
-    def __init__(
-            self,
-            config: RAGPipelineModel
-    ):
+    def __init__(self, config: RAGPipelineModel):
         """
 
         :param config: RAGPipelineModel
 
 
         """
-
         self.documents = config.documents
         self.content_column_name = config.content_column_name
         self.vectorstore = config.vector_store
@@ -46,13 +42,17 @@ class AutoRetriever(BaseRetriever):
         Given a dataframe, return a list of columns with low cardinality if datatype is not bool.
         :return:
         """
-        low_cardinality_columns = []
         columns = data.columns if self.filter_columns is None else self.filter_columns
-        for column in columns:
-            if data[column].dtype != "bool":
-                if data[column].nunique() < self.cardinality_threshold:
-                    low_cardinality_columns.append(column)
-        return low_cardinality_columns
+        # Use vectorized nunique/dtype selection for speed
+        result = []
+        threshold = self.cardinality_threshold
+        for col in columns:
+            if data[col].dtype != "bool":
+                # Use nuniques and early exit if threshold is crossed
+                n_unique = data[col].nunique(dropna=True)
+                if n_unique < threshold:
+                    result.append(col)
+        return result
 
     def get_metadata_field_info(self):
         """
@@ -60,35 +60,29 @@ class AutoRetriever(BaseRetriever):
         :return:
         """
 
-        def _alter_description(data: pd.DataFrame,
-                               low_cardinality_columns: list,
-                               result: List[dict]):
+        def _alter_description(data: pd.DataFrame, low_cardinality_columns: list, result: List[dict]):
             """
             For low cardinality columns, alter the description to include the sorted valid values.
             :param data: pd.DataFrame
             :param low_cardinality_columns: list
             :param result: List[dict]
             """
-            for column_name in low_cardinality_columns:
-                valid_values = sorted(data[column_name].unique())
-                for entry in result:
-                    if entry["name"] == column_name:
-                        entry["description"] += f". Valid values: {valid_values}"
+            # Build a mapping for column_name -> set of valid values
+            lo_card_col_set = set(low_cardinality_columns)
+            value_map = {col: sorted(data[col].unique()) for col in low_cardinality_columns}
+            # Single pass on result list, benefit for many results
+            for entry in result:
+                name = entry.get("name")
+                if name in lo_card_col_set:
+                    entry["description"] += f". Valid values: {value_map[name]}"
 
-        data = documents_to_df(
-            self.content_column_name,
-            self.documents
-        )
+        data = documents_to_df(self.content_column_name, self.documents)
 
-        prompt = self.prompt_template.format(dataframe=data.head().to_json(),
-                                             description=self.document_description)
+        prompt = self.prompt_template.format(dataframe=data.head().to_json(), description=self.document_description)
+        # Direct assignment is fast; invoke->json-load is I/O bound
         result: List[dict] = json.loads(self.llm.invoke(input=prompt).content)
 
-        _alter_description(
-            data,
-            self._get_low_cardinality_columns(data),
-            result
-        )
+        _alter_description(data, self._get_low_cardinality_columns(data), result)
 
         return result
 
@@ -97,9 +91,9 @@ class AutoRetriever(BaseRetriever):
 
         :return:
         """
-        return VectorStoreOperator(vector_store=self.vectorstore,
-                                   documents=self.documents,
-                                   embedding_model=self.embedding_model).vector_store
+        return VectorStoreOperator(
+            vector_store=self.vectorstore, documents=self.documents, embedding_model=self.embedding_model
+        ).vector_store
 
     def as_runnable(self) -> BaseRetriever:
         """
@@ -113,5 +107,5 @@ class AutoRetriever(BaseRetriever):
             vectorstore=vectorstore,
             document_contents=self.document_description,
             metadata_field_info=self.get_metadata_field_info(),
-            verbose=True
+            verbose=True,
         )
