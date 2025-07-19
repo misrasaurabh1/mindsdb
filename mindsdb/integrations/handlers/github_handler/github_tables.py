@@ -624,42 +624,82 @@ class GithubContributorsTable(APIResource):
 
         self.handler.connect()
 
-        data = []
-        for contributor in self.handler.connection.get_repo(self.handler.repository).get_contributors():
+        # Cache columns only once
+        columns = [
+            "avatar_url",
+            "html_url",
+            "followers_url",
+            "subscriptions_url",
+            "organizations_url",
+            "repos_url",
+            "events_url",
+            "received_events_url",
+            "site_admin",
+            "name",
+            "company",
+            "blog",
+            "location",
+            "email",
+            "hireable",
+            "bio",
+            "twitter_username",
+            "public_repos",
+            "public_gists",  # See original logic below
+            "followers",
+            "following",
+            "created_at",
+            "updated_at"
+        ]
+
+        # cache method lookups
+        check_none = self.check_none
+
+        # Pre-bind repo/contributors for less attribute lookup overhead
+        repo = self.handler.connection.get_repo(self.handler.repository)
+        contributors_iter = repo.get_contributors()
+
+        data_append = data = []
+        append = data.append
+        col_public_repos = "public_repos"
+        col_public_gists = "public_gists"
+
+        count = 0
+        for contributor in contributors_iter:
             raw_data = contributor.raw_data
-
-            item = {
-                "avatar_url": self.check_none(raw_data["avatar_url"]),
-                "html_url": self.check_none(raw_data["html_url"]),
-                "followers_url": self.check_none(raw_data["followers_url"]),
-                "subscriptions_url": self.check_none(raw_data["subscriptions_url"]),
-                "organizations_url": self.check_none(raw_data["organizations_url"]),
-                "repos_url": self.check_none(raw_data["repos_url"]),
-                "events_url": self.check_none(raw_data["events_url"]),
-                "received_events_url": self.check_none(raw_data["received_events_url"]),
-                "site_admin": self.check_none(raw_data["site_admin"]),
-                "name": self.check_none(raw_data["name"]),
-                "company": self.check_none(raw_data["company"]),
-                "blog": self.check_none(raw_data["blog"]),
-                "location": self.check_none(raw_data["location"]),
-                "email": self.check_none(raw_data["email"]),
-                "hireable": self.check_none(raw_data["hireable"]),
-                "bio": self.check_none(raw_data["bio"]),
-                "twitter_username": self.check_none(raw_data["twitter_username"]),
-                "public_repos": self.check_none(raw_data["public_repos"]),
-                "public_gists": self.check_none(raw_data["public_repos"]),
-                "followers": self.check_none(raw_data["followers"]),
-                "following": self.check_none(raw_data["following"]),
-                "created_at": self.check_none(raw_data["created_at"]),
-                "updated_at": self.check_none(raw_data["updated_at"])
-            }
-
-            data.append(item)
-
-            if limit <= len(data):
+            # Build the row with minimal attribute lookups and calls
+            row = [
+                check_none(raw_data["avatar_url"]),
+                check_none(raw_data["html_url"]),
+                check_none(raw_data["followers_url"]),
+                check_none(raw_data["subscriptions_url"]),
+                check_none(raw_data["organizations_url"]),
+                check_none(raw_data["repos_url"]),
+                check_none(raw_data["events_url"]),
+                check_none(raw_data["received_events_url"]),
+                check_none(raw_data["site_admin"]),
+                check_none(raw_data["name"]),
+                check_none(raw_data["company"]),
+                check_none(raw_data["blog"]),
+                check_none(raw_data["location"]),
+                check_none(raw_data["email"]),
+                check_none(raw_data["hireable"]),
+                check_none(raw_data["bio"]),
+                check_none(raw_data["twitter_username"]),
+                check_none(raw_data[col_public_repos]),
+                # original logic: public_gists is set equal to public_repos in source code
+                check_none(raw_data[col_public_repos]),
+                check_none(raw_data["followers"]),
+                check_none(raw_data["following"]),
+                check_none(raw_data["created_at"]),
+                check_none(raw_data["updated_at"])
+            ]
+            append(row)
+            count += 1
+            if count >= limit:
                 break
 
-        return pd.DataFrame(data, columns=self.get_columns())
+        # Build DataFrame with a 2D list which is more efficient than a list of dicts
+        return pd.DataFrame(data, columns=columns)
 
     def check_none(self, val):
         return "" if val is None else val
