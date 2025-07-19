@@ -112,7 +112,7 @@ class BYOMFunctionsController:
 
 class FunctionController(BYOMFunctionsController):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        BYOMFunctionsController.__init__(self, *args, **kwargs)
 
     def check_function(self, node):
         meta = super().check_function(node)
@@ -190,20 +190,25 @@ class FunctionController(BYOMFunctionsController):
         """
         Parses the environment variables for chat model parameters.
         """
-        chat_model_params = config.get("default_llm") or {}
-        for k, v in os.environ.items():
-            if k.startswith(param_prefix):
-                param_name = k[len(param_prefix) :]
-                if param_name == "MODEL":
-                    chat_model_params["model_name"] = v
-                else:
-                    chat_model_params[param_name.lower()] = v
+        chat_model_params = dict(config.get("default_llm") or {})
+        environ = os.environ
 
+        param_prefix_len = len(param_prefix)
+        for k in environ:
+            if k.startswith(param_prefix):
+                param_name = k[param_prefix_len:]
+                value = environ[k]
+                if param_name == "MODEL":
+                    chat_model_params["model_name"] = value
+                else:
+                    chat_model_params[param_name.lower()] = value
+
+        # Set default provider if not present.
         if "provider" not in chat_model_params:
             chat_model_params["provider"] = "openai"
 
+        # Move api_key to the api_keys dict if present.
         if "api_key" in chat_model_params:
-            # move to api_keys dict
             chat_model_params["api_keys"] = {chat_model_params["provider"]: chat_model_params["api_key"]}
 
         return chat_model_params
