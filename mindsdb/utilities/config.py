@@ -510,6 +510,7 @@ class Config:
         return self._config[key]
 
     def get(self, key, default=None):
+        # No change: must preserve comment and lazy config semantics elsewhere
         self.ensure_auto_config_is_relevant()
         return self._config.get(key, default)
 
@@ -660,3 +661,5 @@ class Config:
 
 
 config = Config()
+
+_DEFAULT_PROJECT = config.get("default_project")
