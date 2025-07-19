@@ -31,60 +31,43 @@ def get_api_key(
         4. api key env variable
         5. api_key setting in config.json
     """
-    # Special case for vLLM - always return dummy key
     if api_name == "vllm":
         return "EMPTY"
 
-    # 1
-    if "using" in create_args and f"{api_name.lower()}_api_key" in create_args["using"]:
-        return create_args["using"][f"{api_name.lower()}_api_key"]
+    using_args = create_args.get("using", {})
+    params_args = create_args.get("params", {}) if create_args.get("params") is not None else {}
+    conn_args = engine_storage.get_connection_args() if engine_storage is not None else {}
 
-    # 1.5 - Check for generic api_key in using
-    if "using" in create_args and "api_key" in create_args["using"]:
-        return create_args["using"]["api_key"]
-
-    # 2
-    if f"{api_name.lower()}_api_key" in create_args:
-        return create_args[f"{api_name.lower()}_api_key"]
-
-    # 2.5 - Check for generic api_key
-    if "api_key" in create_args:
-        return create_args["api_key"]
-
-    # 3 - Check in params dictionary if it exists (for agents)
-    if "params" in create_args and create_args["params"] is not None:
-        if f"{api_name.lower()}_api_key" in create_args["params"]:
-            return create_args["params"][f"{api_name.lower()}_api_key"]
-        # 3.5 - Check for generic api_key in params
-        if "api_key" in create_args["params"]:
-            return create_args["params"]["api_key"]
-
-    # 4
-    if engine_storage is not None:
-        connection_args = engine_storage.get_connection_args()
-        if f"{api_name.lower()}_api_key" in connection_args:
-            return connection_args[f"{api_name.lower()}_api_key"]
-        # 4.5 - Check for generic api_key in connection_args
-        if "api_key" in connection_args:
-            return connection_args["api_key"]
-
+    # Preference order, batched/short-circuit for performance
+    # 1, 1.5
+    key = using_args.get(f"{api_name.lower()}_api_key") or using_args.get("api_key")
+    if key:
+        return key
+    # 2, 2.5
+    key = create_args.get(f"{api_name.lower()}_api_key") or create_args.get("api_key")
+    if key:
+        return key
+    # 3, 3.5
+    key = params_args.get(f"{api_name.lower()}_api_key") or params_args.get("api_key")
+    if key:
+        return key
+    # 4, 4.5
+    key = conn_args.get(f"{api_name.lower()}_api_key") or conn_args.get("api_key")
+    if key:
+        return key
     # 5
-    api_key = os.getenv(f"{api_name.lower()}_api_key")
-    if api_key is not None:
-        return api_key
-    api_key = os.getenv(f"{api_name.upper()}_API_KEY")
-    if api_key is not None:
-        return api_key
-
+    key = os.getenv(f"{api_name.lower()}_api_key") or os.getenv(f"{api_name.upper()}_API_KEY")
+    if key:
+        return key
     # 6
-    config = Config()
-    api_cfg = config.get(api_name, {})
-    if f"{api_name.lower()}_api_key" in api_cfg:
-        return api_cfg[f"{api_name.lower()}_api_key"]
-
+    api_cfg = Config().get(api_name, {})
+    key = api_cfg.get(f"{api_name.lower()}_api_key")
+    if key:
+        return key
     # 7
-    if "api_keys" in create_args and api_name in create_args["api_keys"]:
-        return create_args["api_keys"][api_name]
+    key = create_args.get("api_keys", {}).get(api_name)
+    if key:
+        return key
 
     if strict:
         provider_upper = api_name.upper()
