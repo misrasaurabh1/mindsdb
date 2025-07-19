@@ -16,11 +16,13 @@ logger = log.getLogger(__name__)
 
 
 class TaskMonitor:
-
     MONITOR_INTERVAL_SECONDS = 2
     LOCK_EXPIRED_SECONDS = MONITOR_INTERVAL_SECONDS * 30
 
     def __init__(self):
+        # Cache host and pid for fast reuse
+        self._run_by = f"{socket.gethostname()} {os.getpid()}"
+        self._lock_expired_delta = dt.timedelta(seconds=self.LOCK_EXPIRED_SECONDS)
         self._active_tasks = {}
 
     def start(self, stop_event: Event = None):
@@ -47,7 +49,6 @@ class TaskMonitor:
                 return
 
     def stop_all_tasks(self):
-
         active_tasks = list(self._active_tasks.keys())
         for task_id in active_tasks:
             self.stop_task(task_id)
@@ -65,7 +66,6 @@ class TaskMonitor:
         # Check active tasks
         active_tasks = list(self._active_tasks.items())
         for task_id, task in active_tasks:
-
             if task_id not in allowed_tasks:
                 # old task
                 self.stop_task(task_id)
@@ -85,28 +85,36 @@ class TaskMonitor:
                     self._set_alive(task_id)
 
     def _lock_task(self, task):
-        run_by = f"{socket.gethostname()} {os.getpid()}"
-        db_date = db.session.query(sa.func.current_timestamp()).first()[0]
+        run_by = self._run_by  # Use cached value
+        db_date = self._get_db_timestamp()  # Single DB hit per call
+
+        needs_commit = False
+
+        # Use explicit ordering: most common path with fast skip
         if task.run_by == run_by:
-            # already locked
-            task.alive_time = db_date
+            # already locked, just refresh alive_time if needed
+            if task.alive_time != db_date:
+                task.alive_time = db_date
+                needs_commit = True
 
         elif task.alive_time is None:
             # not locked yet
-            task.run_by = run_by
-            task.alive_time = db_date
+            if task.run_by != run_by or task.alive_time != db_date:
+                task.run_by = run_by
+                task.alive_time = db_date
+                needs_commit = True
 
-        elif db_date - task.alive_time > dt.timedelta(
-            seconds=self.LOCK_EXPIRED_SECONDS
-        ):
+        elif db_date - task.alive_time > self._lock_expired_delta:
             # lock expired
             task.run_by = run_by
             task.alive_time = db_date
+            needs_commit = True
 
         else:
             return False
 
-        db.session.commit()
+        if needs_commit:
+            db.session.commit()
         return True
 
     def _set_alive(self, task_id):
@@ -143,9 +151,12 @@ class TaskMonitor:
         del self._active_tasks[task_id]
         self._unlock_task(task_id)
 
+    def _get_db_timestamp(self):
+        """Helper to get the current DB timestamp, avoid code repetition."""
+        return db.session.query(sa.func.current_timestamp()).first()[0]
+
 
 def start(verbose=False):
-
     monitor = TaskMonitor()
     monitor.start()
 
