@@ -476,26 +476,29 @@ class PreparedStatementPlanner:
         query = self.planner.query
 
         if params is not None:
-            if len(params) != len(stmt.params):
+            stmt_params = stmt.params
+            if len(params) != len(stmt_params):
                 raise PlanningException("Count of execution parameters don't match prepared statement")
 
+            # Directly call the top-level fill_query_params.
             query = utils.fill_query_params(query, params)
-
             self.planner.query = query
 
         # prevent from second execution
         stmt.params = None
 
-        if (
-            isinstance(query, ast.Select)
-            or isinstance(query, ast.Union)
-            or isinstance(query, ast.CreateTable)
-            or isinstance(query, ast.Insert)
-            or isinstance(query, ast.Update)
-            or isinstance(query, ast.Delete)
-            or isinstance(query, ast.Intersect)
-            or isinstance(query, ast.Except)
-        ):
+        # Faster isinstance check using a tuple of allowed types
+        query_types = (
+            ast.Select,
+            ast.Union,
+            ast.CreateTable,
+            ast.Insert,
+            ast.Update,
+            ast.Delete,
+            ast.Intersect,
+            ast.Except,
+        )
+        if isinstance(query, query_types):
             return self.plan_query(query)
         else:
             return []
@@ -503,6 +506,5 @@ class PreparedStatementPlanner:
     def plan_query(self, query):
         # use v1 planner
         self.planner.from_query(query)
-        step = None
         for step in self.planner.plan.steps:
             yield step
