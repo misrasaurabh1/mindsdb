@@ -58,11 +58,13 @@ class LogTable(ABC):
         Returns:
             BinaryOperation: statement that can be used for 'safe' comparison
         """
+        table_a_company = f"{table_a}.company_id"
+        table_b_company = f"{table_b}.company_id"
         return BinaryOperation(
             op="=",
             args=(
-                Function(op="coalesce", args=(Identifier(f"{table_a}.company_id"), 0)),
-                Function(op="coalesce", args=(Identifier(f"{table_b}.company_id"), 0)),
+                Function(op="coalesce", args=(Identifier(table_a_company), 0)),
+                Function(op="coalesce", args=(Identifier(table_b_company), 0)),
             ),
         )
 
@@ -129,43 +131,63 @@ class JobsHistoryTable(LogTable):
 
     @staticmethod
     def _get_base_subquery() -> Select:
-        query = Select(
-            targets=[
-                Identifier("jobs.name", alias=Identifier("name")),
-                Identifier("project.name", alias=Identifier("project")),
-                Identifier("jobs_history.start_at", alias=Identifier("run_start")),
-                Identifier("jobs_history.end_at", alias=Identifier("run_end")),
-                Identifier("jobs_history.error", alias=Identifier("error")),
-                Identifier("jobs_history.query_str", alias=Identifier("query")),
-            ],
-            from_table=Join(
-                left=Join(
-                    left=Identifier("jobs_history"),
-                    right=Identifier("jobs"),
-                    join_type=JoinType.LEFT_JOIN,
-                    condition=BinaryOperation(
-                        op="and",
-                        args=(
-                            LLMLogTable.company_id_comparison("jobs_history", "jobs"),
-                            BinaryOperation(op="=", args=(Identifier("jobs_history.job_id"), Identifier("jobs.id"))),
-                        ),
-                    ),
-                ),
-                right=Identifier("project"),
+        # Pre-assemble join conditions to avoid redundancy
+        join_condition_left = BinaryOperation(
+            op="and",
+            args=(
+                LogTable.company_id_comparison("jobs_history", "jobs"),
+                BinaryOperation(op="=", args=(_JOBS_HISTORY_JOB_ID, _JOBS_ID)),
+            ),
+        )
+        join_condition_right = BinaryOperation(
+            op="and",
+            args=(
+                LogTable.company_id_comparison("project", "jobs"),
+                BinaryOperation(op="=", args=(_PROJECT_ID, _JOBS_PROJECT_ID)),
+            ),
+        )
+
+        # Prepare targets statically
+        targets = [
+            _JOBS_NAME,
+            _PROJECT_NAME,
+            _JH_START_AT,
+            _JH_END_AT,
+            _JH_ERROR,
+            _JH_QUERY_STR,
+        ]
+
+        # WHERE clause, select operator only once
+        if ctx.company_id is None:
+            where_clause = BinaryOperation(
+                op="is",
+                args=(_JOBS_HISTORY_COMPANY_ID, Constant(None)),
+            )
+        else:
+            where_clause = BinaryOperation(
+                op="=",
+                args=(_JOBS_HISTORY_COMPANY_ID, Constant(ctx.company_id)),
+            )
+
+        # Assemble join hierarchy
+        join = Join(
+            left=Join(
+                left=_JOBS_HISTORY,
+                right=_JOBS,
                 join_type=JoinType.LEFT_JOIN,
-                condition=BinaryOperation(
-                    op="and",
-                    args=(
-                        LLMLogTable.company_id_comparison("project", "jobs"),
-                        BinaryOperation(op="=", args=(Identifier("project.id"), Identifier("jobs.project_id"))),
-                    ),
-                ),
+                condition=join_condition_left,
             ),
-            where=BinaryOperation(
-                op="is" if ctx.company_id is None else "=",
-                args=(Identifier("jobs_history.company_id"), Constant(ctx.company_id)),
-            ),
-            alias=Identifier("jobs_history"),
+            right=_PROJECT,
+            join_type=JoinType.LEFT_JOIN,
+            condition=join_condition_right,
+        )
+
+        # Compose final Select object
+        query = Select(
+            targets=targets,
+            from_table=join,
+            where=where_clause,
+            alias=_JOBS_HISTORY,
         )
         return query
 
@@ -262,3 +284,32 @@ class LogDBController:
         columns_info = [{"name": k, "type": v} for k, v in df.dtypes.items()]
 
         return DataHubResponse(data_frame=df, columns=columns_info)
+
+
+_JOBS_NAME = Identifier("jobs.name", alias=Identifier("name"))
+
+_PROJECT_NAME = Identifier("project.name", alias=Identifier("project"))
+
+_JH_START_AT = Identifier("jobs_history.start_at", alias=Identifier("run_start"))
+
+_JH_END_AT = Identifier("jobs_history.end_at", alias=Identifier("run_end"))
+
+_JH_ERROR = Identifier("jobs_history.error", alias=Identifier("error"))
+
+_JH_QUERY_STR = Identifier("jobs_history.query_str", alias=Identifier("query"))
+
+_JOBS_HISTORY = Identifier("jobs_history")
+
+_JOBS = Identifier("jobs")
+
+_PROJECT = Identifier("project")
+
+_PROJECT_ID = Identifier("project.id")
+
+_JOBS_PROJECT_ID = Identifier("jobs.project_id")
+
+_JOBS_HISTORY_JOB_ID = Identifier("jobs_history.job_id")
+
+_JOBS_ID = Identifier("jobs.id")
+
+_JOBS_HISTORY_COMPANY_ID = Identifier("jobs_history.company_id")
