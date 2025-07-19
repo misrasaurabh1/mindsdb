@@ -47,35 +47,47 @@ class FrappeClient(object):
             limit (int): At most, how many messages to return.
             filters (List[List]): List of filters in the form [field, operator, value] e.g. ["amount", ">", 50]
         """
-        params = {
-            'fields': json.dumps(["*"])
-        }
+        params = {}
+
+        # Only one json.dumps per request for 'fields'; avoid redundant dumps
+        if fields is not None:
+            params['fields'] = json.dumps(fields)
+        else:
+            params['fields'] = '["*"]'
+
         if limit is not None:
             params['limit_page_length'] = limit
         if filters is not None:
             params['filters'] = json.dumps(filters)
-        if fields is not None:
-            params['fields'] = json.dumps(fields)
-        documents_response = requests.get(
-            f'{self.base_url}/resource/{doctype}/',
+
+        url = f'{self.base_url}/resource/{doctype}/'
+        headers = self.headers
+        # Use local variable for requests.get for (minor) attribute lookup saving
+        get = requests.get
+
+        documents_response = get(
+            url,
             params=params,
-            headers=self.headers,
+            headers=headers,
             allow_redirects=False)
+
         if documents_response.is_redirect:
             # We have to manually redirect to preserve the 'Authorization' header.
             # See https://github.com/request/request/pull/1184/commits/210b326fd8625f358e06c59dc11e74468b1de515.
             redirect_url = documents_response.headers.get('location', None)
             if redirect_url is None:
                 raise requests.HTTPError('Could not find redirect URL')
-            documents_response = requests.get(
+            documents_response = get(
                 redirect_url,
                 params=params,
-                headers=self.headers,
+                headers=headers,
                 allow_redirects=False)
 
         if not documents_response.ok:
             documents_response.raise_for_status()
-        return documents_response.json()['data']
+        # Parse JSON once and return the 'data' field.
+        data = documents_response.json()
+        return data['data']
 
     def post_document(
             self,
