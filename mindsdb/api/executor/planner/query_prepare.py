@@ -420,11 +420,8 @@ class PreparedStatementPlanner:
 
     def prepare_show(self, query):
         stmt = self.planner.statement
-
-        stmt.columns = [
-            Column(name="Variable_name", type="str"),
-            Column(name="Value", type="str"),
-        ]
+        # Reuse pre-instantiated columns to avoid repeated construction
+        stmt.columns = _PREPARED_COLUMNS
         return []
 
     def prepare_steps(self, query):
@@ -506,3 +503,10 @@ class PreparedStatementPlanner:
         step = None
         for step in self.planner.plan.steps:
             yield step
+
+
+_PREPARED_VARIABLE_COLUMN = Column(name="Variable_name", type="str")
+
+_PREPARED_VALUE_COLUMN = Column(name="Value", type="str")
+
+_PREPARED_COLUMNS = [_PREPARED_VARIABLE_COLUMN, _PREPARED_VALUE_COLUMN]
