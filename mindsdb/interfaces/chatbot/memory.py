@@ -1,4 +1,3 @@
-
 from typing import Union
 
 from mindsdb_sql_parser.ast import Identifier, Select, BinaryOperation, Constant, OrderBy
@@ -36,19 +35,15 @@ class BaseMemory:
         self._hide_history_before[chat_id] = sent_at
 
     def _apply_hiding(self, chat_id, history):
-        '''
+        """
         hide messages from history
-        '''
+        """
         before = self._hide_history_before.get(chat_id)
-
         if before is None:
             return history
 
-        return [
-            msg
-            for msg in history
-            if msg.sent_at >= before
-        ]
+        # Use list comprehension to filter messages
+        return [msg for msg in history if msg.sent_at >= before]
 
     def get_mode(self, chat_id):
         return self._modes.get(chat_id)
@@ -68,19 +63,21 @@ class BaseMemory:
             del self._cache[chat_id]
 
     def get_chat_history(self, chat_id, table_name=None, cached=True):
+        _cache = self._cache
+        _hide_history_before = self._hide_history_before
         key = (chat_id, table_name) if table_name else chat_id
-        if cached and key in self._cache:
-            history = self._cache[key]
 
+        if cached and key in _cache:
+            history = _cache[key]
         else:
-            history = self._get_chat_history(
-                chat_id,
-                table_name
-            )
-            self._cache[key] = history
+            history = self._get_chat_history(chat_id, table_name)
+            _cache[key] = history
 
-        history = self._apply_hiding(chat_id, history)
-        return history
+        # Fast-path: if nothing to hide, don't call _apply_hiding
+        if chat_id not in _hide_history_before:
+            return history
+
+        return self._apply_hiding(chat_id, history)
 
     def _add_to_history(self, chat_id, chat_message, table_name=None):
         raise NotImplementedError
