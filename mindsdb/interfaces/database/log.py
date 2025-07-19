@@ -58,11 +58,12 @@ class LogTable(ABC):
         Returns:
             BinaryOperation: statement that can be used for 'safe' comparison
         """
+        # Directly construct the arguments to reduce attribute lookups and function call overhead
         return BinaryOperation(
             op="=",
             args=(
-                Function(op="coalesce", args=(Identifier(f"{table_a}.company_id"), 0)),
-                Function(op="coalesce", args=(Identifier(f"{table_b}.company_id"), 0)),
+                Function("coalesce", (Identifier(f"{table_a}.company_id"), 0)),
+                Function("coalesce", (Identifier(f"{table_b}.company_id"), 0)),
             ),
         )
 
