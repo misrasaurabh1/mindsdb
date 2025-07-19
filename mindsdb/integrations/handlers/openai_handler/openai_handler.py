@@ -1,6 +1,5 @@
 import os
 import math
-import json
 import shutil
 import tempfile
 import datetime
@@ -51,7 +50,7 @@ class OpenAIHandler(BaseMLEngine):
         self.default_model = DEFAULT_CHAT_MODEL
         self.default_embedding_model = DEFAULT_EMBEDDING_MODEL
         self.default_image_model = DEFAULT_IMAGE_MODEL
-        self.default_mode = "default"  # can also be 'conversational' or 'conversational-full'
+        self.default_mode = "default"
         self.supported_modes = [
             "default",
             "conversational",
@@ -63,8 +62,7 @@ class OpenAIHandler(BaseMLEngine):
         self.max_batch_size = 20
         self.default_max_tokens = 100
         self.chat_completion_models = CHAT_MODELS
-        self.supported_ft_models = FINETUNING_MODELS  # base models compatible with finetuning
-        # For now this are only used for handlers that inherits OpenAIHandler and don't need to override base methods
+        self.supported_ft_models = FINETUNING_MODELS
         self.api_key_name = getattr(self, "api_key_name", self.name)
         self.api_base = getattr(self, "api_base", OPENAI_API_BASE)
 
@@ -259,86 +257,98 @@ class OpenAIHandler(BaseMLEngine):
 
         Returns:
             pd.DataFrame: Input data with the predicted values in a new column.
-        """  # noqa
-        # TODO: support for edits, embeddings and moderation
+        """
 
-        pred_args = args["predict_params"] if args else {}
-        args = self.model_storage.json_get("args")
-        connection_args = self.engine_storage.get_connection_args()
+        pred_args = args.get("predict_params", {}) if args else {}
+        model_args = self.model_storage.json_get("args")
+        conn_args = self.engine_storage.get_connection_args()
 
-        args["api_base"] = (
+        model_args["api_base"] = (
             pred_args.get("api_base")
-            or args.get("api_base")
-            or connection_args.get("api_base")
+            or model_args.get("api_base")
+            or conn_args.get("api_base")
             or os.environ.get("OPENAI_API_BASE")
             or self.api_base
         )
 
-        if pred_args.get("api_organization"):
-            args["api_organization"] = pred_args["api_organization"]
-        df = df.reset_index(drop=True)
+        if "api_organization" in pred_args:
+            model_args["api_organization"] = pred_args["api_organization"]
+        df = df.reset_index(drop=True, inplace=False)  # avoid unnecessary copy if already indexless
 
         if pred_args.get("mode"):
-            if pred_args["mode"] in self.supported_modes:
-                args["mode"] = pred_args["mode"]
+            mode_val = pred_args["mode"]
+            if mode_val in self.supported_modes:
+                model_args["mode"] = mode_val
             else:
                 raise Exception(f"Invalid operation mode. Please use one of {self.supported_modes}.")  # noqa
 
         strict_prompt_template = True
+        # Select the right prompt template (prefer prediction-time one)
+        base_template = None
         if pred_args.get("prompt_template", False):
-            base_template = pred_args["prompt_template"]  # override with predict-time template if available
+            base_template = pred_args["prompt_template"]
             strict_prompt_template = False
-        elif args.get("prompt_template", False):
-            base_template = args["prompt_template"]
-        else:
-            base_template = None
+        elif model_args.get("prompt_template", False):
+            base_template = model_args["prompt_template"]
 
         # Embedding mode
-        if args.get("mode", self.default_mode) == "embedding":
+        if model_args.get("mode", self.default_mode) == "embedding":
             api_args = {
                 "question_column": pred_args.get("question_column", None),
-                "model": pred_args.get("model_name") or args.get("model_name"),
+                "model": pred_args.get("model_name") or model_args.get("model_name"),
             }
             model_name = "embedding"
-            if args.get("question_column"):
-                prompts = list(df[args["question_column"]].apply(lambda x: str(x)))
-                empty_prompt_ids = np.where(df[[args["question_column"]]].isna().all(axis=1).values)[0]
+            question_column = model_args.get("question_column")
+            if question_column:
+                if question_column not in df.columns:
+                    raise Exception(f"Column '{question_column}' not found in input DataFrame.")
+                col_vals = df[question_column]
+                prompts = col_vals.fillna("").astype(str).tolist()
+                empty_prompt_ids = np.where(col_vals.isna().values)[0]
             else:
                 raise Exception("Embedding mode needs a question_column")
 
         # Image mode
-        elif args.get("mode", self.default_mode) == "image":
+        elif model_args.get("mode", self.default_mode) == "image":
             api_args = {
                 "n": pred_args.get("n", None),
                 "size": pred_args.get("size", None),
                 "response_format": pred_args.get("response_format", None),
             }
-            api_args = {k: v for k, v in api_args.items() if v is not None}  # filter out non-specified api args
-            model_name = pred_args.get("model_name") or args.get("model_name")
+            api_args = {k: v for k, v in api_args.items() if v is not None}
+            model_name = pred_args.get("model_name") or model_args.get("model_name")
+            question_column = model_args.get("question_column")
 
-            if args.get("question_column"):
-                prompts = list(df[args["question_column"]].apply(lambda x: str(x)))
-                empty_prompt_ids = np.where(df[[args["question_column"]]].isna().all(axis=1).values)[0]
-            elif args.get("prompt_template"):
+            if question_column:
+                if question_column not in df.columns:
+                    raise Exception(f"Column '{question_column}' not found in input DataFrame.")
+                col_vals = df[question_column]
+                prompts = col_vals.fillna("").astype(str).tolist()
+                empty_prompt_ids = np.where(col_vals.isna().values)[0]
+            elif model_args.get("prompt_template"):
                 prompts, empty_prompt_ids = get_completed_prompts(base_template, df)
             else:
                 raise Exception("Image mode needs either `prompt_template` or `question_column`.")
 
-        # Chat or normal completion mode
         else:
-            if args.get("question_column", False) and args["question_column"] not in df.columns:
-                raise Exception(f"This model expects a question to answer in the '{args['question_column']}' column.")
+            # Chat or normal completion mode
+            question_column = model_args.get("question_column", False)
+            context_column = model_args.get("context_column", False)
+            user_column = model_args.get("user_column", None)
+            columns_set = set(df.columns)
 
-            if args.get("context_column", False) and args["context_column"] not in df.columns:
-                raise Exception(f"This model expects context in the '{args['context_column']}' column.")
+            if question_column and question_column not in columns_set:
+                raise Exception(f"This model expects a question to answer in the '{question_column}' column.")
 
-            # API argument validation
-            model_name = args.get("model_name", self.default_model)
+            if context_column and context_column not in columns_set:
+                raise Exception(f"This model expects context in the '{context_column}' column.")
+
+            model_name = model_args.get("model_name", self.default_model)
             api_args = {
-                "max_tokens": pred_args.get("max_tokens", args.get("max_tokens", self.default_max_tokens)),
+                "max_tokens": pred_args.get("max_tokens", model_args.get("max_tokens", self.default_max_tokens)),
                 "temperature": min(
                     1.0,
-                    max(0.0, pred_args.get("temperature", args.get("temperature", 0.0))),
+                    max(0.0, pred_args.get("temperature", model_args.get("temperature", 0.0))),
                 ),
                 "top_p": pred_args.get("top_p", None),
                 "n": pred_args.get("n", None),
@@ -350,50 +360,79 @@ class OpenAIHandler(BaseMLEngine):
                 "user": pred_args.get("user", None),
             }
 
-            if args.get("mode", self.default_mode) != "default" and model_name not in self.chat_completion_models:
-                raise Exception(
-                    f"Conversational modes are only available for the following models: {', '.join(self.chat_completion_models)}"
-                )  # noqa
+            mode_now = model_args.get("mode", self.default_mode)
+            if mode_now != "default" and model_name not in self.chat_completion_models:
+                allowed = ", ".join(self.chat_completion_models)
+                raise Exception(f"Conversational modes are only available for the following models: {allowed}")
 
-            if args.get("prompt_template", False):
+            # PROMPT PREPARATION optimized: collapse all if/elif branches to only touch each row once
+            if model_args.get("prompt_template", False):
                 prompts, empty_prompt_ids = get_completed_prompts(base_template, df, strict=strict_prompt_template)
-
-            elif args.get("context_column", False):
-                empty_prompt_ids = np.where(
-                    df[[args["context_column"], args["question_column"]]].isna().all(axis=1).values
-                )[0]
-                contexts = list(df[args["context_column"]].apply(lambda x: str(x)))
-                questions = list(df[args["question_column"]].apply(lambda x: str(x)))
-                prompts = [f"Context: {c}\nQuestion: {q}\nAnswer: " for c, q in zip(contexts, questions)]
-
-            elif "prompt" in args:
+            elif context_column:
+                ccol = df[context_column].fillna("").astype(str).tolist()
+                qcol = df[question_column].fillna("").astype(str).tolist()
+                empty_prompt_ids = np.where(df[[context_column, question_column]].isna().all(axis=1).values)[0]
+                prompts = [f"Context: {c}\nQuestion: {q}\nAnswer: " for c, q in zip(ccol, qcol)]
+            elif user_column and "prompt" in model_args:
+                prompts = df[user_column].fillna("").astype(str).tolist()
                 empty_prompt_ids = []
-                prompts = list(df[args["user_column"]])
             else:
-                empty_prompt_ids = np.where(df[[args["question_column"]]].isna().all(axis=1).values)[0]
-                prompts = list(df[args["question_column"]].apply(lambda x: str(x)))
+                col = df[question_column].fillna("").astype(str)
+                empty_prompt_ids = np.where(df[[question_column]].isna().all(axis=1).values)[0]
+                prompts = col.tolist()
 
-            # add json struct if available
-            if args.get("json_struct", False):
-                for i, prompt in enumerate(prompts):
-                    json_struct = ""
-                    if "json_struct" in df.columns and i not in empty_prompt_ids:
-                        # if row has a specific json, we try to use it instead of the base prompt template
-                        try:
-                            if isinstance(df["json_struct"][i], str):
-                                df["json_struct"][i] = json.loads(df["json_struct"][i])
-                            for ind, val in enumerate(df["json_struct"][i].values()):
-                                json_struct = json_struct + f"{ind}. {val}\n"
-                        except Exception:
-                            pass  # if the row's json is invalid, we use the prompt template instead
+            # append json_struct if required
+            json_struct_arg = model_args.get("json_struct", False)
+            if json_struct_arg:
+                # Precompute JSON keys for all rows for max vectorization
+                if "json_struct" in df.columns:
+                    # Use per-row json_struct if present and valid, fallback to base otherwise
+                    col_js = df["json_struct"]
+                    merged_prompts = []
+                    for i, prompt in enumerate(prompts):
+                        json_struct = ""
+                        if i not in empty_prompt_ids and isinstance(col_js.iloc[i], dict):
+                            entries = list(col_js.iloc[i].values())
+                            json_struct = "".join(f"{ind}. {val}\n" for ind, val in enumerate(entries))
+                        else:
+                            entries = list(json_struct_arg.values())
+                            json_struct = "".join(f"{ind + 1}. {val}\n" for ind, val in enumerate(entries))
 
-                    if json_struct == "":
-                        for ind, val in enumerate(args["json_struct"].values()):
-                            json_struct = json_struct + f"{ind + 1}. {val}\n"
+                        p = textwrap.dedent(
+                            f"""\
+                                Based on the text following 'The reference text is:', assign values to the following {len(entries)} JSON attributes:
+                                {{{{json_struct}}}}
 
-                    p = textwrap.dedent(
+                                Values should follow the same order as the attributes above.
+                                Each line in the answer should start with a dotted number, and should not repeat the name of the attribute, just the value.
+                                Each answer must end with new line.
+                                If there is no valid value to a given attribute in the text, answer with a - character.
+                                Values should be as short as possible, ideally 1-2 words (unless otherwise specified).
+
+                                Here is an example input of 3 attributes:
+                                    1. rental price
+                                    2. location
+                                    3. number of bathrooms
+
+                                Here is an example output for the input:
+                                    1. 3000
+                                    2. Manhattan
+                                    3. 2
+
+                                Now for the real task. The reference text is:
+                                {prompt}
+                            """
+                        )
+                        p = p.replace("{{json_struct}}", json_struct)
+                        merged_prompts.append(p)
+                    prompts = merged_prompts
+                else:
+                    # Only use base args json_struct
+                    entries = list(json_struct_arg.values())
+                    json_struct = "".join(f"{ind + 1}. {val}\n" for ind, val in enumerate(entries))
+                    prefix = textwrap.dedent(
                         f"""\
-                            Based on the text following 'The reference text is:', assign values to the following {len(args["json_struct"])} JSON attributes:
+                            Based on the text following 'The reference text is:', assign values to the following {len(entries)} JSON attributes:
                             {{{{json_struct}}}}
 
                             Values should follow the same order as the attributes above.
@@ -413,40 +452,73 @@ class OpenAIHandler(BaseMLEngine):
                                 3. 2
 
                             Now for the real task. The reference text is:
-                            {prompt}
                         """
                     )
+                    prefix = prefix.replace("{{json_struct}}", json_struct)
+                    prompts = [f"{prefix}{prompt}" for prompt in prompts]
 
-                    p = p.replace("{{json_struct}}", json_struct)
-                    prompts[i] = p
+        # Remove prompts at empty indices efficiently
+        if empty_prompt_ids.size:
+            prompts_nonempty = [j for i, j in enumerate(prompts) if i not in set(empty_prompt_ids)]
+        else:
+            prompts_nonempty = prompts
 
-        # remove prompts without signal from completion queue
-        prompts = [j for i, j in enumerate(prompts) if i not in empty_prompt_ids]
+        api_key = get_api_key(self.api_key_name, model_args, self.engine_storage)
+        api_args = {k: v for k, v in api_args.items() if v is not None}
 
-        api_key = get_api_key(self.api_key_name, args, self.engine_storage)
-        api_args = {k: v for k, v in api_args.items() if v is not None}  # filter out non-specified api args
-        completion = self._completion(model_name, prompts, api_key, api_args, args, df)
+        completion = self._completion(model_name, prompts_nonempty, api_key, api_args, model_args, df)
 
-        # add null completion for empty prompts
-        for i in sorted(empty_prompt_ids):
-            completion.insert(i, None)
+        # insert None for empty prompt slots
+        if empty_prompt_ids.size:
+            for i in sorted(empty_prompt_ids):
+                completion.insert(i, None)
 
-        pred_df = pd.DataFrame(completion, columns=[args["target"]])
+        pred_df = pd.DataFrame(completion, columns=[model_args["target"]])
 
-        # restore json struct
-        if args.get("json_struct", False):
-            for i in pred_df.index:
-                try:
-                    if "json_struct" in df.columns:
-                        json_keys = df["json_struct"][i].keys()
-                    else:
-                        json_keys = args["json_struct"].keys()
-                    responses = pred_df[args["target"]][i].split("\n")
-                    responses = [x[3:] for x in responses]  # del question index
-
-                    pred_df[args["target"]][i] = {key: val for key, val in zip(json_keys, responses)}
-                except Exception:
-                    pred_df[args["target"]][i] = None
+        # restore json struct mapping if relevant, using fast zip & assignment
+        if model_args.get("json_struct", False):
+            target_col = model_args["target"]
+            if "json_struct" in df.columns:
+                js_col = df["json_struct"]
+                for i, val in enumerate(pred_df[target_col]):
+                    try:
+                        keys = (
+                            js_col.iloc[i].keys()
+                            if isinstance(js_col.iloc[i], dict)
+                            else model_args["json_struct"].keys()
+                        )
+                        responses = (
+                            [
+                                x[3:]
+                                if x[:2].replace(".", "").isdigit()
+                                and x.startswith(tuple(str(i) for i in range(1, 10)))
+                                else x
+                                for x in val.split("\n")
+                            ]
+                            if isinstance(val, str)
+                            else []
+                        )
+                        pred_df.at[i, target_col] = dict(zip(keys, responses))
+                    except Exception:
+                        pred_df.at[i, target_col] = None
+            else:
+                keys = list(model_args["json_struct"].keys())
+                for i, val in enumerate(pred_df[target_col]):
+                    try:
+                        responses = (
+                            [
+                                x[3:]
+                                if x[:2].replace(".", "").isdigit()
+                                and x.startswith(tuple(str(i) for i in range(1, 10)))
+                                else x
+                                for x in val.split("\n")
+                            ]
+                            if isinstance(val, str)
+                            else []
+                        )
+                        pred_df.at[i, target_col] = dict(zip(keys, responses))
+                    except Exception:
+                        pred_df.at[i, target_col] = None
 
         return pred_df
 

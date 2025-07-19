@@ -58,45 +58,41 @@ def get_completed_prompts(base_template: str, df: pd.DataFrame, strict=True) -> 
 
     :return prompts: list of in-filled prompts using `base_template` and relevant columns from `df`
     :return empty_prompt_ids: np.int numpy array (shape (n_missing_rows,)) with the row indexes where in-fill failed due to missing data.
-    """  # noqa
-    columns = []
-    spans = []
-    matches = list(re.finditer("{{(.*?)}}", base_template))
-
-    if len(matches) == 0:
-        # no placeholders
+    """
+    matches = list(re.finditer(r"{{(.*?)}}", base_template))
+    if not matches:
         if strict:
             raise AssertionError("No placeholders found in the prompt, please provide a valid prompt template.")
-        prompts = [base_template] * len(df)
-        return prompts, np.ndarray(0)
+        return [base_template] * len(df), np.empty(0, dtype=int)
 
-    first_span = matches[0].start()
-    last_span = matches[-1].end()
-
+    columns = [m.group(1).strip() for m in matches]
+    s = base_template
+    # Split template quickly using re, preserving start/end segments
+    parts = []
+    last_index = 0
     for m in matches:
-        columns.append(m[0].replace("{", "").replace("}", ""))
-        spans.extend((m.start(), m.end()))
+        parts.append(s[last_index : m.start()])
+        last_index = m.end()
+    parts.append(s[last_index:])
 
-    spans = spans[1:-1]  # omit first and last, they are added separately
-    template = [
-        base_template[s:e] for s, e in list(zip(spans, spans[1:]))[::2]
-    ]  # take every other to skip placeholders  # noqa
-    template.insert(0, base_template[0:first_span])  # add prompt start
-    template.append(base_template[last_span:])  # add prompt end
-
+    # Vectorized filling, minimizing per-row operations
+    # Build mask for empty rows (all columns are NA)
     empty_prompt_ids = np.where(df[columns].isna().all(axis=1).values)[0]
 
-    df["__mdb_prompt"] = ""
-    for i in range(len(template)):
-        atom = template[i]
-        if i < len(columns):
-            col = df[columns[i]].replace(to_replace=[None], value="")  # add empty quote if data is missing
-            df["__mdb_prompt"] = df["__mdb_prompt"].apply(lambda x: x + atom) + col.astype("string")
-        else:
-            df["__mdb_prompt"] = df["__mdb_prompt"].apply(lambda x: x + atom)
-    prompts = list(df["__mdb_prompt"])
+    # Pre-fill with empty string for columns with None
+    filled_df = df[columns].fillna("")
 
-    return prompts, empty_prompt_ids
+    # For efficiency, extract all values at once
+    template_rows = []
+    vals = filled_df.values.astype(str)  # shape (nrows, ncols)
+    for row_vals in vals:
+        full_prompt = ""
+        for i, val in enumerate(row_vals):
+            full_prompt += parts[i] + val
+        full_prompt += parts[-1]
+        template_rows.append(full_prompt)
+
+    return template_rows, empty_prompt_ids
 
 
 def get_llm_config(provider: str, args: Dict) -> BaseLLMConfig:
