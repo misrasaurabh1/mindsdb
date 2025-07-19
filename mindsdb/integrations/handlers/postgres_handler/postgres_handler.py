@@ -10,8 +10,6 @@ import psycopg
 from psycopg import Column as PGColumn, Cursor
 from psycopg.postgres import TypeInfo, types as pg_types
 from psycopg.pq import ExecStatus
-
-from mindsdb_sql_parser import parse_sql
 from mindsdb.utilities.render.sqlalchemy_render import SqlalchemyRender
 from mindsdb_sql_parser.ast.base import ASTNode
 
@@ -140,12 +138,10 @@ class PostgresHandler(MetaDatabaseHandler):
     @profiler.profile("init_pg_handler")
     def __init__(self, name=None, **kwargs):
         super().__init__(name)
-        self.parser = parse_sql
         self.connection_args = kwargs.get("connection_data")
         self.dialect = "postgresql"
         self.database = self.connection_args.get("database")
         self.renderer = SqlalchemyRender("postgres")
-
         self.connection = None
         self.is_connected = False
         self.thread_safe = False
@@ -409,21 +405,15 @@ class PostgresHandler(MetaDatabaseHandler):
         Returns:
             Response: A response object containing the list of tables and views, formatted as per the `Response` class.
         """
-        all_filter = "and table_schema = current_schema()"
-        if all is True:
-            all_filter = ""
-        query = f"""
-            SELECT
-                table_schema,
-                table_name,
-                table_type
-            FROM
-                information_schema.tables
-            WHERE
-                table_schema NOT IN ('information_schema', 'pg_catalog')
-                and table_type in ('BASE TABLE', 'VIEW')
-                {all_filter}
-        """
+        # Use direct inlined condition for fast SQL string construction
+        schema_filter = "" if all else "and table_schema = current_schema()"
+        query = (
+            "SELECT table_schema, table_name, table_type "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('information_schema', 'pg_catalog') "
+            "and table_type in ('BASE TABLE', 'VIEW') "
+            f"{schema_filter}"
+        )
         return self.native_query(query)
 
     def get_columns(self, table_name: str, schema_name: Optional[str] = None) -> Response:
