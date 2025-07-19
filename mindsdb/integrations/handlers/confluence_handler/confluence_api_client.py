@@ -11,6 +11,8 @@ class ConfluenceAPIClient:
         self.session = requests.Session()
         self.session.auth = (self.username, self.password)
         self.session.headers.update({"Accept": "application/json"})
+        # Pre-compute the database URL prefix to avoid string formatting on every call
+        self._db_url_prefix = f"{self.url}/wiki/api/v2/databases/"
 
     def get_spaces(
         self,
@@ -102,8 +104,8 @@ class ConfluenceAPIClient:
         return self._make_request("GET", url)
 
     def get_database_by_id(self, database_id: int) -> dict:
-        url = f"{self.url}/wiki/api/v2/databases/{database_id}"
-
+        # Use precomputed url prefix for faster URL creation
+        url = f"{self._db_url_prefix}{database_id}"
         return self._make_request("GET", url)
 
     def get_tasks(
@@ -168,7 +170,9 @@ class ConfluenceAPIClient:
         return results
 
     def _make_request(self, method: str, url: str, params: dict = None, data: dict = None) -> dict:
-        response = self.session.request(method, url, params=params, json=data)
+        # Minor optimization: use local variables for frequently accessed attributes
+        session = self.session
+        response = session.request(method, url, params=params, json=data)
 
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}: {response.text}")
