@@ -86,34 +86,27 @@ class PreparedStatementPlanner:
         if stmt is None:
             raise PlanningException("Statement is not prepared")
 
-        columns_result = []
+        # Use list comprehension for faster execution and reduced overhead
+        columns_result = [
+            {
+                "alias": column.alias,
+                "type": column.type,
+                "name": column.name,
+                "table_name": column.table.name if column.table else None,
+                "table_alias": column.table.name if column.table else None,
+                "ds": column.table.ds if column.table else None,
+            }
+            for column in stmt.columns
+        ]
 
-        for column in stmt.columns:
-            table, ds = None, None
-            if column.table is not None:
-                table = column.table.name
-                ds = column.table.ds
-            columns_result.append(
-                dict(
-                    alias=column.alias,
-                    type=column.type,
-                    name=column.name,
-                    table_name=table,
-                    table_alias=table,
-                    ds=ds,
-                )
-            )
-
-        parameters = []
-        for param in stmt.params:
-            name = "?"
-            parameters.append(
-                dict(
-                    alias=name,
-                    type="str",
-                    name=name,
-                )
-            )
+        # Use list multiplication for parameters since all elements are static
+        parameters_count = len(stmt.params)
+        if parameters_count:
+            parameter_dict = {"alias": "?", "type": "str", "name": "?"}
+            # Use a fast shallow copy since param content is static
+            parameters = [parameter_dict] * parameters_count
+        else:
+            parameters = []
 
         return {"parameters": parameters, "columns": columns_result}
 
