@@ -1224,12 +1224,10 @@ ALL = vars()
 
 
 def VAR_NAME(val, prefix=""):
-    global ALL
-
-    for key in ALL.keys():
-        value = ALL[key]
+    # Use direct iteration for speed
+    for key, value in ALL.items():
         if value == val and key != "val":
-            if prefix == "" or (prefix != "" and prefix == key[: len(prefix)]):
+            if not prefix or key.startswith(prefix):
                 return key
     return None
 
