@@ -404,18 +404,17 @@ class EnginesTable(Table):
 
     @classmethod
     def get_data(cls, **kwargs):
-        data = [
-            [
-                "InnoDB",
-                "DEFAULT",
-                "Supports transactions, row-level locking, and foreign keys",
-                "YES",
-                "YES",
-                "YES",
-            ]
-        ]
-
-        df = pd.DataFrame(data, columns=cls.columns)
+        # Construct DataFrame using dict-of-lists for better performance on single-row, fixed schema
+        df = pd.DataFrame(
+            {
+                "ENGINE": ["InnoDB"],
+                "SUPPORT": ["DEFAULT"],
+                "COMMENT": ["Supports transactions, row-level locking, and foreign keys"],
+                "TRANSACTIONS": ["YES"],
+                "XA": ["YES"],
+                "SAVEPOINTS": ["YES"],
+            }
+        )
         return df
 
 
