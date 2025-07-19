@@ -217,43 +217,35 @@ class ModelController():
     @staticmethod
     def _get_data_integration_ref(statement, database_controller):
         # TODO use database_controller handler_controller internally
-        data_integration_ref = None
-        fetch_data_query = None
-        if statement.integration_name is not None:
-            fetch_data_query = statement.query_str
-            integration_name = statement.integration_name.parts[0].lower()
+        if statement.integration_name is None:
+            return None, None
 
-            databases_meta = database_controller.get_dict()
-            if integration_name not in databases_meta:
-                raise EntityNotExistsError('Database does not exist', integration_name)
-            data_integration_meta = databases_meta[integration_name]
-            # TODO improve here. Suppose that it is view
-            if data_integration_meta['type'] == 'project':
-                data_integration_ref = {
-                    'type': 'project'
-                }
-            elif data_integration_meta['type'] == 'system':
-                data_integration_ref = {
-                    'type': 'system'
-                }
-            else:
-                data_integration_ref = {
-                    'type': 'integration',
-                    'id': data_integration_meta['id']
-                }
+        fetch_data_query = statement.query_str
+        integration_name = statement.integration_name.parts[0].lower()
+        databases_meta = database_controller.get_dict()
+        data_integration_meta = databases_meta.get(integration_name)
+        if data_integration_meta is None:
+            raise EntityNotExistsError('Database does not exist', integration_name)
+
+        # TODO improve here. Suppose that it is view
+        typ = data_integration_meta['type']
+        if typ == 'project':
+            data_integration_ref = {'type': 'project'}
+        elif typ == 'system':
+            data_integration_ref = {'type': 'system'}
+        else:
+            data_integration_ref = {'type': 'integration', 'id': data_integration_meta['id']}
         return data_integration_ref, fetch_data_query
 
     def prepare_create_statement(self, statement, database_controller):
         # extract data from Create model or Retrain statement and prepare it for using in crate and retrain functions
-        project_name = statement.name.parts[0].lower()
-        model_name = statement.name.parts[1].lower()
+        name_parts = statement.name.parts
+        project_name = name_parts[0].lower()
+        model_name = name_parts[1].lower()
 
-        sql_task = None
-        if statement.task is not None:
-            sql_task = statement.task.to_string()
-        problem_definition = {
-            '__mdb_sql_task': sql_task
-        }
+        sql_task = statement.task.to_string() if statement.task is not None else None
+        problem_definition = {'__mdb_sql_task': sql_task}
+
         if statement.targets is not None:
             problem_definition['target'] = statement.targets[0].parts[-1]
 
@@ -262,35 +254,41 @@ class ModelController():
         label = None
         if statement.using is not None:
             label = statement.using.pop('tag', None)
-
             problem_definition['using'] = statement.using
 
-        if statement.order_by is not None:
-            problem_definition['timeseries_settings'] = {
+        order_by = statement.order_by
+        if order_by is not None:
+            ts_settings = {
                 'is_timeseries': True,
-                'order_by': getattr(statement, 'order_by')[0].field.parts[-1]
+                'order_by': order_by[0].field.parts[-1]
             }
-            for attr in ['horizon', 'window']:
-                if getattr(statement, attr) is not None:
-                    problem_definition['timeseries_settings'][attr] = getattr(statement, attr)
-
-            if statement.group_by is not None:
-                problem_definition['timeseries_settings']['group_by'] = [col.parts[-1] for col in statement.group_by]
+            # Only called once per attr
+            horizon = getattr(statement, 'horizon', None)
+            if horizon is not None:
+                ts_settings['horizon'] = horizon
+            window = getattr(statement, 'window', None)
+            if window is not None:
+                ts_settings['window'] = window
+            group_by = getattr(statement, 'group_by', None)
+            if group_by is not None:
+                ts_settings['group_by'] = [col.parts[-1] for col in group_by]
+            problem_definition['timeseries_settings'] = ts_settings
 
         join_learn_process = False
-        if 'join_learn_process' in problem_definition.get('using', {}):
-            join_learn_process = problem_definition['using']['join_learn_process']
-            del problem_definition['using']['join_learn_process']
+        using = problem_definition.get('using')
+        if using and 'join_learn_process' in using:
+            join_learn_process = using['join_learn_process']
+            del using['join_learn_process']
 
-        return dict(
-            model_name=model_name,
-            project_name=project_name,
-            data_integration_ref=data_integration_ref,
-            fetch_data_query=fetch_data_query,
-            problem_definition=problem_definition,
-            join_learn_process=join_learn_process,
-            label=label
-        )
+        return {
+            'model_name': model_name,
+            'project_name': project_name,
+            'data_integration_ref': data_integration_ref,
+            'fetch_data_query': fetch_data_query,
+            'problem_definition': problem_definition,
+            'join_learn_process': join_learn_process,
+            'label': label
+        }
 
     def create_model(self, statement, ml_handler):
         params = self.prepare_create_statement(statement, ml_handler.database_controller)
