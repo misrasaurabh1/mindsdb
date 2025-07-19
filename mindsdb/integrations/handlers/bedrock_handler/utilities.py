@@ -1,5 +1,8 @@
 import boto3
-from typing import Text, Optional
+from typing import Dict, Tuple, Text, Optional
+
+# Internal cache for clients, indexed by parameters.
+_client_cache: Dict[Tuple[Text, Text, Text, Text, Optional[Text]], boto3.client] = {}
 
 
 def create_amazon_bedrock_client(
@@ -34,13 +37,20 @@ def create_amazon_bedrock_client(
     boto3.client
         Amazon Bedrock client.
     """
-    if client not in ["bedrock", "bedrock-runtime"]:
+    if client not in ("bedrock", "bedrock-runtime"):
         raise ValueError("The client must be 'bedrock' or 'bedrock-runtime'")
 
-    return boto3.client(
+    key = (client, aws_access_key_id, aws_secret_access_key, region_name, aws_session_token)
+    cached_client = _client_cache.get(key)
+    if cached_client is not None:
+        return cached_client
+
+    new_client = boto3.client(
         client,
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
         region_name=region_name,
         aws_session_token=aws_session_token,
     )
+    _client_cache[key] = new_client
+    return new_client
