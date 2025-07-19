@@ -165,11 +165,17 @@ class TwelveLabsHandler(BaseMLEngine):
         # get api client
         twelve_labs_api_client, _ = self._get_api_client(args)
 
-        # check if task is search
-        if args['task'] == 'search':
+        # Cache commonly accessed args for performance
+        task = args['task']
+        target_prefix = args['target'] + '_'
+
+        if task == 'search':
             # get search query
             # TODO: support multiple queries
-            query = df[args['search_query_column']].tolist()[0]
+
+            # Faster and robust, uses .iat (avoid constructing a list)
+            search_column = args['search_query_column']
+            query = df[search_column].iat[0]
 
             # search for query in index
             data = twelve_labs_api_client.search_index(
@@ -185,22 +191,35 @@ class TwelveLabsHandler(BaseMLEngine):
             # df_modules = pd.json_normalize(data, record_path='modules', meta=metadata, record_prefix='modules_')
             # df_predictions = pd.merge(df_metadata, df_modules, on=metadata)
             # return df_predictions
-            return pd.json_normalize(data).add_prefix(args['target'] + '_')
+            # improve prefix application by using DataFrame.rename if data is not nested (otherwise fallback)
+            norm_df = pd.json_normalize(data)
+            if norm_df.columns.size > 0:
+                norm_df.rename(columns=lambda c: target_prefix + c if not c.startswith(target_prefix) else c, inplace=True)
+            return norm_df
 
-        # check if task is summarize
-        elif args['task'] == 'summarization':
-            # sumarize videos
-            video_ids = df['video_id'].tolist()
+        elif task == 'summarization':
+            # summarize videos
+            # Use values for direct memory access (skip .tolist overhead on object dtype)
+            video_ids = df['video_id'].values.tolist()
+            summarization_type = args['summarization_type']
+            prompt = args['prompt']
             data = twelve_labs_api_client.summarize_videos(
                 video_ids=video_ids,
-                summarization_type=args['summarization_type'],
-                prompt=args['prompt']
+                summarization_type=summarization_type,
+                prompt=prompt
             )
 
-            if args['summarization_type'] in ('chapter', 'highlight'):
-                return pd.json_normalize(data, record_path=f"{args['summarization_type']}s", meta=['id']).add_prefix(args['target'] + '_')
+            if summarization_type in ('chapter', 'highlight'):
+                record_path = f"{summarization_type}s"
+                norm_df = pd.json_normalize(data, record_path=record_path, meta=['id'])
+                if norm_df.columns.size > 0:
+                    norm_df.rename(columns=lambda c: target_prefix + c if not c.startswith(target_prefix) else c, inplace=True)
+                return norm_df
             else:
-                return pd.json_normalize(data).add_prefix(args['target'] + '_')
+                norm_df = pd.json_normalize(data)
+                if norm_df.columns.size > 0:
+                    norm_df.rename(columns=lambda c: target_prefix + c if not c.startswith(target_prefix) else c, inplace=True)
+                return norm_df
 
     def describe(self, attribute: Optional[str] = None) -> pd.DataFrame:
         """
