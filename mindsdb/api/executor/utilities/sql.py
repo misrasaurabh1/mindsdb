@@ -109,37 +109,27 @@ def get_duckdb_functions_and_kw_list() -> list[str] | None:
         list[str] | None: List of supported functions and keywords, or None if unable to retrieve the list.
     """
     global _duckdb_functions_and_kw_list
-    window_functions_list = [
-        "cume_dist",
-        "dense_rank",
-        "first_value",
-        "lag",
-        "last_value",
-        "lead",
-        "nth_value",
-        "ntile",
-        "percent_rank",
-        "rank_dense",
-        "rank",
-        "row_number",
-    ]
-    if _duckdb_functions_and_kw_list is None:
-        try:
-            df, _ = query_df_with_type_infer_fallback(
-                """
-                select distinct name
-                from (
-                    select function_name as name from duckdb_functions()
-                    union all
-                    select keyword_name as name from duckdb_keywords()
-                ) ta;
-            """,
-                dataframes={},
-            )
-            df.columns = [name.lower() for name in df.columns]
-            _duckdb_functions_and_kw_list = df["name"].drop_duplicates().str.lower().to_list() + window_functions_list
-        except Exception as e:
-            logger.warning(f"Unable to get DuckDB functions list: {e}")
+    if _duckdb_functions_and_kw_list is not None:
+        return _duckdb_functions_and_kw_list
+
+    try:
+        # Use persistent connection and avoid unnecessary dataframe/copy churn
+        con = _get_singleton_duckdb_con()
+        query = """
+            select distinct name
+            from (
+                select function_name as name from duckdb_functions()
+                union all
+                select keyword_name as name from duckdb_keywords()
+            ) ta;
+        """
+        df = con.execute(query).fetchdf()
+        # Get lowercased names, drop duplicates
+        names = df["name"].drop_duplicates().str.lower()
+        # Combine with window functions only once here
+        _duckdb_functions_and_kw_list = list(names) + list(WINDOW_FUNCTIONS_LIST)
+    except Exception as e:
+        logger.warning(f"Unable to get DuckDB functions list: {e}")
 
     return _duckdb_functions_and_kw_list
 
@@ -254,3 +244,28 @@ def query_df(df, query, session=None):
     result_df.replace({np.nan: None}, inplace=True)
     result_df.columns = [x[0] for x in description]
     return result_df
+
+
+def _get_singleton_duckdb_con():
+    global _singleton_duckdb_con
+    if _singleton_duckdb_con is None:
+        _singleton_duckdb_con = duckdb.connect(database=":memory:")
+    return _singleton_duckdb_con
+
+
+WINDOW_FUNCTIONS_LIST = (
+    "cume_dist",
+    "dense_rank",
+    "first_value",
+    "lag",
+    "last_value",
+    "lead",
+    "nth_value",
+    "ntile",
+    "percent_rank",
+    "rank_dense",
+    "rank",
+    "row_number",
+)
+
+_singleton_duckdb_con = None
