@@ -156,16 +156,8 @@ def infer_mysql_type(original_type: str) -> MYSQL_DATA_TYPE:
     Returns:
         MYSQL_DATA_TYPE: The inferred MySQL data type.
     """
-    match original_type.lower():
-        case "double precision" | "real" | "numeric" | "float":
-            data_type = MYSQL_DATA_TYPE.FLOAT
-        case "integer" | "smallint" | "int" | "bigint":
-            data_type = MYSQL_DATA_TYPE.BIGINT
-        case "timestamp without time zone" | "timestamp with time zone" | "date" | "timestamp":
-            data_type = MYSQL_DATA_TYPE.DATETIME
-        case _:
-            data_type = MYSQL_DATA_TYPE.VARCHAR
-    return data_type
+    # Use fast dict lookup to determine the data type
+    return _TYPE_MAP.get(original_type.lower(), MYSQL_DATA_TYPE.VARCHAR)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -816,3 +808,19 @@ class MetaHandlerInfoTable(Table):
 
         df = pd.DataFrame(data, columns=cls.columns)
         return df
+
+
+_TYPE_MAP = {
+    "double precision": MYSQL_DATA_TYPE.FLOAT,
+    "real": MYSQL_DATA_TYPE.FLOAT,
+    "numeric": MYSQL_DATA_TYPE.FLOAT,
+    "float": MYSQL_DATA_TYPE.FLOAT,
+    "integer": MYSQL_DATA_TYPE.BIGINT,
+    "smallint": MYSQL_DATA_TYPE.BIGINT,
+    "int": MYSQL_DATA_TYPE.BIGINT,
+    "bigint": MYSQL_DATA_TYPE.BIGINT,
+    "timestamp without time zone": MYSQL_DATA_TYPE.DATETIME,
+    "timestamp with time zone": MYSQL_DATA_TYPE.DATETIME,
+    "date": MYSQL_DATA_TYPE.DATETIME,
+    "timestamp": MYSQL_DATA_TYPE.DATETIME,
+}
