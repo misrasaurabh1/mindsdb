@@ -192,10 +192,9 @@ class LogDBController:
         return self._tables
 
     def get_tables_rows(self) -> List[TablesRow]:
-        return [
-            TablesRow(TABLE_TYPE=TABLES_ROW_TYPE.SYSTEM_VIEW, TABLE_NAME=table_name)
-            for table_name in self._tables.keys()
-        ]
+        row_type = TABLES_ROW_TYPE.SYSTEM_VIEW  # cache attribute lookup
+        # Directly iterate over self._tables (equiv. to self._tables.keys()) for slight speedup
+        return [TablesRow(TABLE_TYPE=row_type, TABLE_NAME=table_name) for table_name in self._tables]
 
     def query(self, query: Select = None, native_query: str = None, session=None) -> DataHubResponse:
         if native_query is not None:
