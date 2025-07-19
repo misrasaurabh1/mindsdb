@@ -3,6 +3,7 @@ import ast as py_ast
 import typing as t
 
 from mindsdb_sql_parser.ast import OrderBy, Identifier, Star, Select, Constant, BinaryOperation, Tuple, Latest
+from functools import reduce
 
 
 class MongoToAst:
@@ -178,60 +179,35 @@ class MongoWhereParser:
     def __init__(self, query):
         self.query = query
 
+        # Create dispatch table for AST node handlers
+        ast_type_map = {
+            py_ast.BoolOp: self._handle_boolop,
+            py_ast.Compare: self._handle_compare,
+            py_ast.Name: self._handle_name,
+            py_ast.Attribute: self._handle_attr,
+        }
+        # For Python 3.8+, all literals are py_ast.Constant
+        if hasattr(py_ast, "Constant"):
+            ast_type_map[py_ast.Constant] = self._handle_const
+        # For <=3.7, need .Num and .Str
+        if hasattr(py_ast, "Num"):
+            ast_type_map[py_ast.Num] = self._handle_num
+        if hasattr(py_ast, "Str"):
+            ast_type_map[py_ast.Str] = self._handle_str
+
+        self._ast_type_map = ast_type_map
+
     def to_ast(self):
         # parse as python string
         # replace '=' with '=='
-        query = re.sub(r'([^=><])=([^=])', r'\1==\2', self.query)
-
+        query = _EQ_RE.sub(_replace_eq, self.query)
         tree = py_ast.parse(query, mode='eval')
         return self.process(tree.body)
 
     def process(self, node):
-
-        if isinstance(node, py_ast.BoolOp):
-            # is AND or OR
-            op = node.op.__class__.__name__
-            # values can be more than 2
-            arg1 = self.process(node.values[0])
-            for val1 in node.values[1:]:
-                arg2 = self.process(val1)
-                arg1 = BinaryOperation(op=op, args=[arg1, arg2])
-
-            return arg1
-
-        if isinstance(node, py_ast.Compare):
-            # it is
-            if len(node.ops) != 1:
-                raise NotImplementedError(f'Multiple ops {node.ops}')
-            op = self.compare_op(node.ops[0])
-            arg1 = self.process(node.left)
-            arg2 = self.process(node.comparators[0])
-            return BinaryOperation(op=op, args=[arg1, arg2])
-
-        if isinstance(node, py_ast.Name):
-            # is special operator: latest, ...
-            if node.id == 'latest':
-                return Latest()
-
-        if isinstance(node, py_ast.Constant):
-            # it is constant
-            return Constant(value=node.value)
-
-        # ---- python 3.7 objects -----
-        if isinstance(node, py_ast.Str):
-            return Constant(value=node.s)
-
-        if isinstance(node, py_ast.Num):
-            return Constant(value=node.n)
-
-        # -----------------------------
-
-        if isinstance(node, py_ast.Attribute):
-            # is 'this.field' - is attribute
-            if node.value.id != 'this':
-                raise NotImplementedError(f'Unknown variable {node.value.id}')
-            return Identifier(parts=[node.attr])
-
+        handler = self._ast_type_map.get(type(node))
+        if handler:
+            return handler(node)
         raise NotImplementedError(f'Unknown node {node}')
 
     def compare_op(self, op):
@@ -255,3 +231,41 @@ class MongoWhereParser:
     @staticmethod
     def test(cls):
         assert cls('this.a ==1 and "te" >= latest').to_string() == "a = 1 AND 'te' >= LATEST"
+
+    def _handle_boolop(self, node):
+        op = node.op.__class__.__name__
+        # Use reduce to fold for efficiency
+        processed_args = [self.process(v) for v in node.values]
+        return reduce(lambda a, b: BinaryOperation(op=op, args=[a, b]), processed_args)
+
+    def _handle_compare(self, node):
+        if len(node.ops) != 1:
+            raise NotImplementedError(f'Multiple ops {node.ops}')
+        op = self.compare_op(node.ops[0])
+        arg1 = self.process(node.left)
+        arg2 = self.process(node.comparators[0])
+        return BinaryOperation(op=op, args=[arg1, arg2])
+
+    def _handle_name(self, node):
+        if node.id == 'latest':
+            return Latest()
+        raise NotImplementedError(f'Unknown variable {node.id}')
+
+    def _handle_const(self, node):
+        return Constant(value=node.value)
+
+    def _handle_num(self, node):
+        return Constant(value=node.n)
+
+    def _handle_str(self, node):
+        return Constant(value=node.s)
+
+    def _handle_attr(self, node):
+        if getattr(node.value, 'id', None) != 'this':
+            raise NotImplementedError(f'Unknown variable {getattr(node.value, "id", None)}')
+        return Identifier(parts=[node.attr])
+
+def _replace_eq(match):
+    return f'{match.group(1)}=={match.group(2)}'
+
+_EQ_RE = re.compile(r'([^=><])=([^=])')
