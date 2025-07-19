@@ -8,6 +8,7 @@ from mindsdb.utilities import log
 from mindsdb.utilities.context import context as ctx
 
 from .types import ChatBotMessage, BotException
+from operator import itemgetter
 
 logger = log.getLogger(__name__)
 
@@ -24,10 +25,14 @@ class BasePolling:
         chat_id = message.destination if isinstance(message.destination, tuple) else (message.destination,)
         text = message.text
 
-        t_params = self.params["chat_table"] if table_name is None else next(
-            (t["chat_table"] for t in self.params if t["chat_table"]["name"] == table_name)
+        t_params = (
+            self.params["chat_table"]
+            if table_name is None
+            else next((t["chat_table"] for t in self.params if t["chat_table"]["name"] == table_name))
         )
-        chat_id_cols = t_params["chat_id_col"] if isinstance(t_params["chat_id_col"], list) else [t_params["chat_id_col"]]
+        chat_id_cols = (
+            t_params["chat_id_col"] if isinstance(t_params["chat_id_col"], list) else [t_params["chat_id_col"]]
+        )
 
         ast_query = Insert(
             table=Identifier(t_params["name"]),
@@ -43,7 +48,6 @@ class BasePolling:
 class MessageCountPolling(BasePolling):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self._to_stop = False
         self.chats_prev = None
 
@@ -70,7 +74,9 @@ class MessageCountPolling(BasePolling):
                             message = None
 
                         if message:
-                            self.chat_task.on_message(message, chat_memory=chat_memory, table_name=chat_params["chat_table"]["name"])
+                            self.chat_task.on_message(
+                                message, chat_memory=chat_memory, table_name=chat_params["chat_table"]["name"]
+                            )
 
             except Exception as e:
                 logger.error(e)
@@ -94,41 +100,57 @@ class MessageCountPolling(BasePolling):
         return last_message
 
     def check_message_count(self, chat_params):
+        # Local binding for performance
         p_params = chat_params["polling"]
-
-        chat_ids = []
-
-        id_cols = p_params["chat_id_col"] if isinstance(p_params["chat_id_col"], list) else [p_params["chat_id_col"]]
+        id_cols_raw = p_params["chat_id_col"]
+        id_cols = id_cols_raw if isinstance(id_cols_raw, list) else [id_cols_raw]
+        num_id_cols = len(id_cols)
         msgs_col = p_params["count_col"]
-        # get chats status info
+        table = p_params["table"]
+        chats_prev = self.chats_prev
+
+        # Pre-create Identifiers and targets (AST Nodes; fast, since API is read-only):
+        id_col_identifiers = [Identifier(id_col) for id_col in id_cols]
+        targets = id_col_identifiers + [Identifier(msgs_col)]
+
         ast_query = Select(
-            targets=[*[Identifier(id_col) for id_col in id_cols], Identifier(msgs_col)],
-            from_table=Identifier(p_params["table"]),
+            targets=targets,
+            from_table=Identifier(table),
         )
 
         resp = self.chat_task.chat_handler.query(query=ast_query)
-        if resp.data_frame is None:
+        df = resp.data_frame
+        if df is None:
             raise BotException("Error to get count of messages")
 
+        # Optimize row->tuple creation:
+        # Use itemgetter for multiple id columns (slightly faster than generator expr in tight loop)
+        getter = itemgetter(*id_cols)
         chats = {}
-        for row in resp.data_frame.to_dict("records"):
-            chat_id = tuple(row[id_col] for id_col in id_cols)
-            msgs = row[msgs_col]
 
+        # Minimize .to_dict("records") cost: assign as local
+        rows = df.to_dict("records")
+        # Hoist lookups outside loop
+        for row in rows:
+            # Faster than tuple(row[col] for ...) for dict-like rows
+            chat_id = getter(row) if num_id_cols > 1 else (row[id_cols[0]],)
+            msgs = row[msgs_col]
             chats[chat_id] = msgs
 
-        if self.chats_prev is None:
-            # first run
+        # Quick path for first run
+        if chats_prev is None:
             self.chats_prev = chats
-        else:
-            # compare
-            # for new keys
-            for chat_id, count_msgs in chats.items():
-                if self.chats_prev.get(chat_id) != count_msgs:
-                    chat_ids.append(chat_id)
+            return []
 
-            self.chats_prev = chats
-        return chat_ids
+        # Compare current and previous
+        prev_chats = chats_prev
+        append = chat_ids_append = [].append  # Micro optimize append lookups (CPython only)
+        # Only use .get() once per loop, and skip perfectly matched keys
+        for chat_id, count_msgs in chats.items():
+            if prev_chats.get(chat_id) != count_msgs:
+                chat_ids_append(chat_id)
+        self.chats_prev = chats
+        return chat_ids_append.__self__  # Returns the list, equivalent to chat_ids
 
     def stop(self):
         self._to_stop = True
@@ -151,7 +173,11 @@ class RealtimePolling(BasePolling):
             # Identify the table relevant to this event based on the key.
             event_keys = list(key.keys())
             for param in self.params:
-                table_keys = [param["chat_table"]["chat_id_col"]] if isinstance(param["chat_table"]["chat_id_col"], str) else param["chat_table"]["chat_id_col"]
+                table_keys = (
+                    [param["chat_table"]["chat_id_col"]]
+                    if isinstance(param["chat_table"]["chat_id_col"], str)
+                    else param["chat_table"]["chat_id_col"]
+                )
 
                 if sorted(event_keys) == sorted(table_keys):
                     t_params = param["chat_table"]
@@ -162,7 +188,11 @@ class RealtimePolling(BasePolling):
             t_params = self.params[0]
 
         # Get the chat ID from the row based on the chat ID column(s).
-        chat_id = tuple(row[key] for key in t_params["chat_id_col"]) if isinstance(t_params["chat_id_col"], list) else row[t_params["chat_id_col"]]
+        chat_id = (
+            tuple(row[key] for key in t_params["chat_id_col"])
+            if isinstance(t_params["chat_id_col"], list)
+            else row[t_params["chat_id_col"]]
+        )
 
         message = ChatBotMessage(
             ChatBotMessage.Type.DIRECT,
@@ -179,10 +209,7 @@ class RealtimePolling(BasePolling):
         )
 
     def run(self, stop_event):
-        self.chat_task.chat_handler.subscribe(
-            stop_event,
-            self._callback
-        )
+        self.chat_task.chat_handler.subscribe(stop_event, self._callback)
 
     # def send_message(self, message: ChatBotMessage):
     #
@@ -193,6 +220,7 @@ class WebhookPolling(BasePolling):
     """
     Polling class for handling webhooks.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
