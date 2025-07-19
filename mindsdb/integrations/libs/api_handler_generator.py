@@ -4,6 +4,9 @@ from io import StringIO
 import json
 from typing import Dict, List, Any
 import yaml
+import requests
+from yaml import CLoader as Loader, Loader
+
 try:
     from yaml import CLoader as Loader
 except ImportError:
@@ -90,8 +93,8 @@ class OpenAPISpecParser:
             if openapi_spec_path.endswith('.json'):
                 self.openapi_spec = response.json()
             else:
-                stream = StringIO(response.text)
-                self.openapi_spec = yaml.load(stream, Loader=Loader)
+                # Directly parse YAML from string for efficiency
+                self.openapi_spec = yaml.load(response.text, Loader=Loader)
         else:
             raise ApiRequestException('URL is required')
 
