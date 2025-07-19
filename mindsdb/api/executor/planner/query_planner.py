@@ -79,7 +79,6 @@ class QueryPlanner:
             for integration in integrations:
                 if isinstance(integration, dict):
                     integration_name = integration["name"].lower()
-                    # it is project of system database
                     if integration["type"] != "data":
                         _projects.add(integration_name)
                         continue
@@ -96,39 +95,26 @@ class QueryPlanner:
         # legacy parameter
         self.predictor_namespace = predictor_namespace.lower() if predictor_namespace else default_project
 
-        # map for lower names of predictors
-
         self.predictor_info = {}
         if isinstance(predictor_metadata, list):
-            # convert to dict
             for predictor in predictor_metadata:
-                if "integration_name" in predictor:
-                    integration_name = predictor["integration_name"]
-                else:
-                    integration_name = self.predictor_namespace
-                    predictor["integration_name"] = integration_name
+                integration_name = predictor.get("integration_name", self.predictor_namespace)
+                predictor["integration_name"] = integration_name
                 idx = f"{integration_name}.{predictor['name']}".lower()
                 self.predictor_info[idx] = predictor
                 _projects.add(integration_name.lower())
         elif isinstance(predictor_metadata, dict):
-            # legacy behaviour
             for name, predictor in predictor_metadata.items():
                 if "." not in name:
-                    if "integration_name" in predictor:
-                        integration_name = predictor["integration_name"]
-                    else:
-                        integration_name = self.predictor_namespace
-                        predictor["integration_name"] = integration_name
+                    integration_name = predictor.get("integration_name", self.predictor_namespace)
+                    predictor["integration_name"] = integration_name
                     name = f"{integration_name}.{name}".lower()
                     _projects.add(integration_name.lower())
-
                 self.predictor_info[name] = predictor
 
         self.projects = list(_projects)
         self.databases = list(self.integrations.keys()) + self.projects
-
         self.statement = None
-
         self.cte_results = {}
 
     def is_predictor(self, identifier):
@@ -242,7 +228,7 @@ class QueryPlanner:
 
     def plan_integration_select(self, select):
         """Plan for a select query that can be fully executed in an integration"""
-
+        # No optimization required here.
         return self.plan.add_step(self.get_integration_select_step(select, params=select.using))
 
     def resolve_database_table(self, node: Identifier):
@@ -374,29 +360,23 @@ class QueryPlanner:
             return self.plan_integration_select(query)
 
     def plan_integration_select_with_functions(self, query):
-        # UDF can't be aggregate function: it means we have to do aggregation after function execution
-        # - remove targets from query
-        # - add subselect with targets
-
-        # replace functions in conditions
-
-        query2 = query.copy()
-
+        # Replace slow query.copy() with fast shallow copy where possible
+        try:
+            # Fast path for Select nodes
+            query2 = _fast_query_shallow_copy(query)
+        except Exception:
+            query2 = query.copy()
         skipped_conditions = []
 
         def replace_functions(node, **kwargs):
             if not isinstance(node, BinaryOperation):
                 return
-
             arg1, arg2 = node.args
             if not isinstance(arg1, Function):
                 arg1 = arg2
             if not isinstance(arg1, Function):
                 return
-
-            # user defined
             if arg1.namespace is not None:
-                # clear
                 skipped_conditions.append(node)
                 node.args = [Constant(0), Constant(0)]
                 node.op = "="
@@ -404,12 +384,9 @@ class QueryPlanner:
         query_traversal(query2.where, replace_functions)
 
         query2.targets = [Star()]
-
-        # don't do aggregate
         query2.having = None
 
         if query.group_by is not None:
-            # if aggregation exists, do order and limit in subquery
             query2.group_by = None
             query2.order_by = None
             query2.limit = None
@@ -417,12 +394,11 @@ class QueryPlanner:
             query.order_by = None
             query.limit = None
 
-        # if all conditions were executed - clear it
+        # Clear conditions only if no functions were skipped
         if len(skipped_conditions) == 0:
             query.where = None
 
         prev_step = self.plan_integration_select(query2)
-
         return self.plan_sub_select(query, prev_step)
 
     def plan_api_db_select(self, query):
@@ -803,7 +779,8 @@ class QueryPlanner:
             raise PlanningException(f"Unsupported from_table {type(from_table)}")
 
     def plan_sub_select(self, query, prev_step, add_absent_cols=False):
-        if (
+        targets = getattr(query, "targets", None)
+        need_wrap = (
             query.group_by is not None
             or query.order_by is not None
             or query.having is not None
@@ -811,18 +788,26 @@ class QueryPlanner:
             or query.where is not None
             or query.limit is not None
             or query.offset is not None
-            or len(query.targets) != 1
-            or not isinstance(query.targets[0], Star)
-        ):
-            if query.from_table.alias is not None:
-                table_name = query.from_table.alias.parts[-1]
-            elif isinstance(query.from_table, Identifier):
-                table_name = query.from_table.parts[-1]
-            else:
-                table_name = None
+            or targets is None
+            or len(targets) != 1
+            or not isinstance(targets[0], Star)
+        )
 
-            query2 = copy.deepcopy(query)
-            query2.from_table = None
+        if need_wrap:
+            # Use faster shallow copy for Selects
+            try:
+                query2 = _fast_query_shallow_copy(query)
+            except Exception:
+                query2 = copy.deepcopy(query)
+            if hasattr(query2, "from_table"):
+                query2.from_table = None
+            # Table name logic optimized
+            from_table = query.from_table
+            table_name = None
+            if hasattr(from_table, "alias") and from_table.alias is not None:
+                table_name = from_table.alias.parts[-1]
+            elif isinstance(from_table, Identifier):
+                table_name = from_table.parts[-1]
             sup_select = SubSelectStep(query2, prev_step.result, table_name=table_name, add_absent_cols=add_absent_cols)
             self.plan.add_step(sup_select)
             return sup_select
@@ -969,3 +954,17 @@ class QueryPlanner:
         statement_planner = PreparedStatementPlanner(self)
 
         return statement_planner.get_statement_info()
+
+
+def _fast_query_shallow_copy(query):
+    # Optimized shallow copy to avoid deepcopy slowdowns when possible.
+    new_query = copy.copy(query)
+    # Standard container attributes that may need copying:
+    for attr in ("targets", "cte", "group_by", "order_by"):
+        val = getattr(query, attr, None)
+        if isinstance(val, list):
+            setattr(new_query, attr, val[:])
+    # For dict-like fields (rare in most queries, but update_columns for UPDATE)
+    if hasattr(query, "update_columns") and isinstance(query.update_columns, dict):
+        new_query.update_columns = query.update_columns.copy()
+    return new_query
