@@ -227,11 +227,12 @@ class ListsTable(APITable):
         self.delete_lists(list_ids)
 
     def get_lists(self, **kwargs) -> List[Dict]:
-        if not self.handler.connection.check_bearer_token_validity():
+        connection = self.handler.connection
+        if not connection.check_bearer_token_validity():
             self.handler.connect()
-        client = self.handler.connection
-        lists_data = client.get_all_lists(**kwargs)
-        return lists_data
+            connection = self.handler.connection  # re-fetch connection in case connect() changes it
+        # Directly return the lists to avoid an unnecessary local variable.
+        return connection.get_all_lists(**kwargs)
 
     def delete_lists(self, list_ids: List[dict]) -> None:
         if not self.handler.connection.check_bearer_token_validity():
@@ -308,9 +309,7 @@ class SiteColumnsTable(APITable):
         ValueError
             If the query contains an unsupported condition
         """
-        select_statement_parser = SELECTQueryParser(
-            query, "siteColumns", self.get_columns()
-        )
+        select_statement_parser = SELECTQueryParser(query, "siteColumns", self.get_columns())
         (
             selected_columns,
             where_conditions,
@@ -402,17 +401,13 @@ class SiteColumnsTable(APITable):
         client = self.handler.connection
         client.delete_site_columns(sharepoint_column_ids)
 
-    def update_site_columns(
-        self, sharepoint_column_ids: List[dict], values_to_update: dict
-    ) -> None:
+    def update_site_columns(self, sharepoint_column_ids: List[dict], values_to_update: dict) -> None:
         if not self.handler.connection.check_bearer_token_validity():
             self.handler.connect()
         client = self.handler.connection
         client.update_site_columns(sharepoint_column_ids, values_to_update)
 
-    def create_site_columns(
-        self, sharepoint_column_data: List[Dict[Text, Any]]
-    ) -> None:
+    def create_site_columns(self, sharepoint_column_data: List[Dict[Text, Any]]) -> None:
         if not self.handler.connection.check_bearer_token_validity():
             self.handler.connect()
         client = self.handler.connection
@@ -468,9 +463,7 @@ class ListItemsTable(APITable):
         ValueError
             If the query contains an unsupported condition
         """
-        select_statement_parser = SELECTQueryParser(
-            query, "listItems", self.get_columns()
-        )
+        select_statement_parser = SELECTQueryParser(query, "listItems", self.get_columns())
         (
             selected_columns,
             where_conditions,
@@ -512,9 +505,7 @@ class ListItemsTable(APITable):
 
         list_items_df = update_query_executor.execute_query()
 
-        list_items_ids = list_items_df[["id", "siteId", "listId"]].to_dict(
-            orient="records"
-        )
+        list_items_ids = list_items_df[["id", "siteId", "listId"]].to_dict(orient="records")
 
         self.update_list_items(list_items_ids, values_to_update)
 
@@ -545,9 +536,7 @@ class ListItemsTable(APITable):
 
         list_items_df = delete_query_executor.execute_query()
 
-        list_items_ids = list_items_df[["id", "siteId", "listId"]].to_dict(
-            orient="records"
-        )
+        list_items_ids = list_items_df[["id", "siteId", "listId"]].to_dict(orient="records")
         self.delete_list_items(list_items_ids)
 
     def get_list_items(self, **kwargs) -> List[Dict]:
@@ -563,9 +552,7 @@ class ListItemsTable(APITable):
         client = self.handler.connection
         client.delete_items(list_item_ids)
 
-    def update_list_items(
-        self, list_items_ids: List[dict], values_to_update: dict
-    ) -> None:
+    def update_list_items(self, list_items_ids: List[dict], values_to_update: dict) -> None:
         if not self.handler.connection.check_bearer_token_validity():
             self.handler.connect()
         client = self.handler.connection
