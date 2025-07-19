@@ -187,20 +187,19 @@ class MongoWhereParser:
         return self.process(tree.body)
 
     def process(self, node):
-
-        if isinstance(node, py_ast.BoolOp):
-            # is AND or OR
-            op = node.op.__class__.__name__
-            # values can be more than 2
-            arg1 = self.process(node.values[0])
-            for val1 in node.values[1:]:
+        node_type = type(node)
+        
+        if node_type is _PY_AST_BOOL:
+            op = type(node.op).__name__
+            vals = node.values
+            arg1 = self.process(vals[0])
+            for val1 in vals[1:]:
                 arg2 = self.process(val1)
                 arg1 = BinaryOperation(op=op, args=[arg1, arg2])
-
             return arg1
 
-        if isinstance(node, py_ast.Compare):
-            # it is
+        elif node_type is _PY_AST_CMP:
+            # only support one operator!
             if len(node.ops) != 1:
                 raise NotImplementedError(f'Multiple ops {node.ops}')
             op = self.compare_op(node.ops[0])
@@ -208,50 +207,60 @@ class MongoWhereParser:
             arg2 = self.process(node.comparators[0])
             return BinaryOperation(op=op, args=[arg1, arg2])
 
-        if isinstance(node, py_ast.Name):
+        elif node_type is _PY_AST_NAME:
             # is special operator: latest, ...
             if node.id == 'latest':
                 return Latest()
+            # fall through if not latest
 
-        if isinstance(node, py_ast.Constant):
+        elif node_type is _PY_AST_CONST:
             # it is constant
             return Constant(value=node.value)
 
-        # ---- python 3.7 objects -----
-        if isinstance(node, py_ast.Str):
+        elif _PY_AST_STR is not None and node_type is _PY_AST_STR:
             return Constant(value=node.s)
 
-        if isinstance(node, py_ast.Num):
+        elif _PY_AST_NUM is not None and node_type is _PY_AST_NUM:
             return Constant(value=node.n)
 
-        # -----------------------------
-
-        if isinstance(node, py_ast.Attribute):
+        elif node_type is _PY_AST_ATTR:
             # is 'this.field' - is attribute
-            if node.value.id != 'this':
-                raise NotImplementedError(f'Unknown variable {node.value.id}')
+            if getattr(node.value, 'id', None) != 'this':
+                raise NotImplementedError(f'Unknown variable {getattr(node.value, "id", None)}')
             return Identifier(parts=[node.attr])
 
-        raise NotImplementedError(f'Unknown node {node}')
+        raise NotImplementedError(f'Unknown node {type(node).__name__}')
 
     def compare_op(self, op):
-
-        opname = op.__class__.__name__
-
-        # TODO: in, not
-
-        ops = {
-            'Eq': '=',
-            'NotEq': '!=',
-            'Gt': '>',
-            'Lt': '<',
-            'GtE': '>=',
-            'LtE': '<=',
-        }
-        if opname not in ops:
+        opname = type(op).__name__
+        try:
+            return _COMPARE_OPS[opname]
+        except KeyError:
             raise NotImplementedError(f'Unknown $where op: {opname}')
-        return ops[opname]
 
     @staticmethod
     def test(cls):
         assert cls('this.a ==1 and "te" >= latest').to_string() == "a = 1 AND 'te' >= LATEST"
+
+_COMPARE_OPS = {
+    'Eq': '=',
+    'NotEq': '!=',
+    'Gt': '>',
+    'Lt': '<',
+    'GtE': '>=',
+    'LtE': '<=',
+}
+
+_PY_AST_NAME = py_ast.Name
+
+_PY_AST_CONST = py_ast.Constant
+
+_PY_AST_BOOL = py_ast.BoolOp
+
+_PY_AST_CMP = py_ast.Compare
+
+_PY_AST_ATTR = py_ast.Attribute
+
+_PY_AST_STR = None
+
+_PY_AST_NUM = None
