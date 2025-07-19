@@ -4,6 +4,10 @@ from io import StringIO
 import json
 from typing import Dict, List, Any
 import yaml
+import requests
+from yaml import CLoader as Loader
+from functools import lru_cache
+
 try:
     from yaml import CLoader as Loader
 except ImportError:
@@ -83,15 +87,13 @@ class OpenAPISpecParser:
     A class to parse the OpenAPI specification.
     """
     def __init__(self, openapi_spec_path: str) -> None:
-        if openapi_spec_path.startswith('http://') or openapi_spec_path.startswith('https://'):
+        if openapi_spec_path.startswith(('http://', 'https://')):
             response = requests.get(openapi_spec_path)
             response.raise_for_status()
-
             if openapi_spec_path.endswith('.json'):
                 self.openapi_spec = response.json()
             else:
-                stream = StringIO(response.text)
-                self.openapi_spec = yaml.load(stream, Loader=Loader)
+                self.openapi_spec = yaml.load(response.text, Loader=Loader)
         else:
             raise ApiRequestException('URL is required')
 
@@ -134,7 +136,7 @@ class APIResourceGenerator:
         self.openapi_spec_parser = OpenAPISpecParser(url)
         self.connection_data = connection_data
         self.url_base = url_base
-        self.options = options or {}
+        self.options = options if options is not None else {}
         self.resources = {}
 
     def check_connection(self):
@@ -214,11 +216,10 @@ class APIResourceGenerator:
         return endpoints
 
     def get_ref_object(self, ref):
-        # get object by $ref link
+        # Use cached parsing of $ref
         el = self.openapi_spec_parser.get_specs()
-        for path in ref.lstrip('#').split('/'):
-            if path:
-                el = el[path]
+        for path in self._parse_ref(ref):
+            el = el[path]
         return el
 
     def _process_endpoint_parameters(self, parameters: list) -> Dict[str, APIEndpointParam]:
@@ -353,6 +354,12 @@ class APIResourceGenerator:
         elif 'allOf' in schema:
             # TODO Get only the first type.
             return self.get_resource_type(schema['allOf'][0])
+
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _parse_ref(ref):
+        # Strip # and split path
+        return tuple(p for p in ref.lstrip('#').split('/') if p)
 
 
 class RestApiTable(APIResource):
