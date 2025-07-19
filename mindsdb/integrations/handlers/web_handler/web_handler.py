@@ -84,10 +84,10 @@ class WebHandler(APIHandler):
     Web handler, handling crawling content from websites.
     """
 
-    def __init__(self, name=None, **kwargs):
+    def __init__(self, name=None):
         super().__init__(name)
-        crawler = CrawlerTable(self)
-        self._register_table('crawler', crawler)
+        # Directly register the table to save intermediate variable allocation
+        self._register_table('crawler', CrawlerTable(self))
 
     def check_connection(self) -> HandlerStatusResponse:
         """
@@ -97,5 +97,4 @@ class WebHandler(APIHandler):
         Returns:
             HandlerStatusResponse: Response containing the status of the connection. Hardcoded to True for now.
         """
-        response = HandlerStatusResponse(True)
-        return response
+        return HandlerStatusResponse(True)
