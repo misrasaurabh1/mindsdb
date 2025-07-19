@@ -217,30 +217,32 @@ class ModelController():
     @staticmethod
     def _get_data_integration_ref(statement, database_controller):
         # TODO use database_controller handler_controller internally
-        data_integration_ref = None
-        fetch_data_query = None
-        if statement.integration_name is not None:
-            fetch_data_query = statement.query_str
-            integration_name = statement.integration_name.parts[0].lower()
+        integration_name_attr = statement.integration_name
+        if integration_name_attr is None:
+            return None, None
 
-            databases_meta = database_controller.get_dict()
-            if integration_name not in databases_meta:
-                raise EntityNotExistsError('Database does not exist', integration_name)
+        fetch_data_query = statement.query_str
+        integration_name = integration_name_attr.parts[0].lower()
+        databases_meta = database_controller.get_dict()
+
+        try:
             data_integration_meta = databases_meta[integration_name]
-            # TODO improve here. Suppose that it is view
-            if data_integration_meta['type'] == 'project':
-                data_integration_ref = {
-                    'type': 'project'
-                }
-            elif data_integration_meta['type'] == 'system':
-                data_integration_ref = {
-                    'type': 'system'
-                }
-            else:
-                data_integration_ref = {
-                    'type': 'integration',
-                    'id': data_integration_meta['id']
-                }
+        except KeyError:
+            raise EntityNotExistsError('Database does not exist', integration_name)
+
+        dtype = data_integration_meta['type']
+
+        # TODO improve here. Suppose that it is view
+        if dtype == 'project':
+            data_integration_ref = {'type': 'project'}
+        elif dtype == 'system':
+            data_integration_ref = {'type': 'system'}
+        else:
+            data_integration_ref = {
+                'type': 'integration',
+                'id': data_integration_meta['id']
+            }
+
         return data_integration_ref, fetch_data_query
 
     def prepare_create_statement(self, statement, database_controller):
