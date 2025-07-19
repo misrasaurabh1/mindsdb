@@ -4,10 +4,7 @@ from typing import List, Text
 import pandas as pd
 
 from mindsdb.integrations.libs.api_handler import APIResource
-from mindsdb.integrations.utilities.sql_utils import (
-    FilterCondition,
-    SortColumn
-)
+from mindsdb.integrations.utilities.sql_utils import FilterCondition, SortColumn
 
 from mindsdb.integrations.utilities.files.file_reader import FileReader
 
@@ -23,7 +20,7 @@ class ListFilesTable(APIResource):
         limit: int = None,
         sort: List[SortColumn] = None,
         targets: List[Text] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Lists the files in Microsoft OneDrive.
@@ -40,25 +37,38 @@ class ListFilesTable(APIResource):
         client = self.handler.connect()
         files = client.get_all_items()
 
-        data = []
-        for file in files:
-            item = {
-                "name": file["name"],
-                "path": file["path"],
-                "extension": file["name"].split(".")[-1]
-            }
+        # Pre-check targets to avoid checks and computations per loop
+        need_content = targets and "content" in targets
+        need_content_if_selectstar = not targets
+        # If not targets but 'content' may or may not be wanted, handle explicitly
+        # In both cases, we want to add a "content" column
 
-            # If the 'content' column is explicitly requested, fetch the content of the file.
-            if targets and "content" in targets:
-                item["content"] = client.get_item_content(file["path"])
+        # Gather all file entries in dicts in one pass with a list comprehension (faster than loop+append)
+        if need_content or need_content_if_selectstar:
+            # Preallocate None, only fetch for requested
+            content_dict = {}
+            if need_content:
+                # Only fetch content for those files when "content" is in targets
+                for file in files:
+                    content_dict[file["path"]] = client.get_item_content(file["path"])
+            data = [
+                {
+                    "name": file["name"],
+                    "path": file["path"],
+                    "extension": file["name"].rsplit(".", 1)[-1],  # slightly faster for single split
+                    "content": (content_dict.get(file["path"]) if need_content else None),
+                }
+                for file in files
+            ]
+        else:
+            # Don't generate the content column at all for efficiency if not needed
+            data = [
+                {"name": file["name"], "path": file["path"], "extension": file["name"].rsplit(".", 1)[-1]}
+                for file in files
+            ]
 
-            # If a SELECT * query is executed, i.e., targets is empty, set the content to None.
-            elif not targets:
-                item["content"] = None
-
-            data.append(item)
-
-        df = pd.DataFrame(data)
+        # Use pd.DataFrame.from_records which is optimal for list-of-dict
+        df = pd.DataFrame.from_records(data)
         return df
 
     def get_columns(self):
