@@ -87,36 +87,49 @@ class LLMLogTable(LogTable):
 
     @staticmethod
     def _get_base_subquery() -> Select:
+        # Precompute which operator needs to be used for "where"
+        where_op = "is" if ctx.company_id is None else "="
+        where_const = Constant(ctx.company_id)
+
+        targets = [
+            _api_key_id,
+            _model_name_id,
+            _input_id,
+            _output_id,
+            _start_time_id,
+            _end_time_id,
+            _prompt_tokens_id,
+            _completion_tokens_id,
+            _total_tokens_id,
+            _success_id,
+        ]
+
+        # Precompute join condition (reuse static method)
+        join_condition = BinaryOperation(
+            op="and",
+            args=(
+                LLMLogTable.company_id_comparison("llm_log", "predictor"),
+                BinaryOperation(op="=", args=(_llm_log_model_id, _predictor_id_id)),
+            ),
+        )
+
+        from_table = Join(
+            left=_llm_log_id,
+            right=_predictor_id,
+            join_type=JoinType.LEFT_JOIN,
+            condition=join_condition,
+        )
+
+        where = BinaryOperation(
+            op=where_op,
+            args=(_llm_log_company_id, where_const),
+        )
+
         query = Select(
-            targets=[
-                Identifier("llm_log.api_key", alias=Identifier("api_key")),
-                Identifier("predictor.name", alias=Identifier("model_name")),
-                Identifier("llm_log.input", alias=Identifier("input")),
-                Identifier("llm_log.output", alias=Identifier("output")),
-                Identifier("llm_log.start_time", alias=Identifier("start_time")),
-                Identifier("llm_log.end_time", alias=Identifier("end_time")),
-                Identifier("llm_log.prompt_tokens", alias=Identifier("prompt_tokens")),
-                Identifier("llm_log.completion_tokens", alias=Identifier("completion_tokens")),
-                Identifier("llm_log.total_tokens", alias=Identifier("total_tokens")),
-                Identifier("llm_log.success", alias=Identifier("success")),
-            ],
-            from_table=Join(
-                left=Identifier("llm_log"),
-                right=Identifier("predictor"),
-                join_type=JoinType.LEFT_JOIN,
-                condition=BinaryOperation(
-                    op="and",
-                    args=(
-                        LLMLogTable.company_id_comparison("llm_log", "predictor"),
-                        BinaryOperation(op="=", args=(Identifier("llm_log.model_id"), Identifier("predictor.id"))),
-                    ),
-                ),
-            ),
-            where=BinaryOperation(
-                op="is" if ctx.company_id is None else "=",
-                args=(Identifier("llm_log.company_id"), Constant(ctx.company_id)),
-            ),
-            alias=Identifier("llm_log"),
+            targets=targets,
+            from_table=from_table,
+            where=where,
+            alias=_llm_log_id,
         )
         return query
 
@@ -262,3 +275,34 @@ class LogDBController:
         columns_info = [{"name": k, "type": v} for k, v in df.dtypes.items()]
 
         return DataHubResponse(data_frame=df, columns=columns_info)
+
+
+_api_key_id = Identifier("llm_log.api_key", alias=Identifier("api_key"))
+
+_model_name_id = Identifier("predictor.name", alias=Identifier("model_name"))
+
+_input_id = Identifier("llm_log.input", alias=Identifier("input"))
+
+_output_id = Identifier("llm_log.output", alias=Identifier("output"))
+
+_start_time_id = Identifier("llm_log.start_time", alias=Identifier("start_time"))
+
+_end_time_id = Identifier("llm_log.end_time", alias=Identifier("end_time"))
+
+_prompt_tokens_id = Identifier("llm_log.prompt_tokens", alias=Identifier("prompt_tokens"))
+
+_completion_tokens_id = Identifier("llm_log.completion_tokens", alias=Identifier("completion_tokens"))
+
+_total_tokens_id = Identifier("llm_log.total_tokens", alias=Identifier("total_tokens"))
+
+_success_id = Identifier("llm_log.success", alias=Identifier("success"))
+
+_llm_log_id = Identifier("llm_log")
+
+_predictor_id = Identifier("predictor")
+
+_llm_log_model_id = Identifier("llm_log.model_id")
+
+_predictor_id_id = Identifier("predictor.id")
+
+_llm_log_company_id = Identifier("llm_log.company_id")
