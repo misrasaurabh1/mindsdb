@@ -5,7 +5,7 @@ import duckdb
 from duckdb import InvalidInputException
 import numpy as np
 
-from mindsdb_sql_parser import parse_sql
+from mindsdb_sql_parser import ast, parse_sql
 from mindsdb_sql_parser.ast import ASTNode, Select, Identifier, Function, Constant
 
 from mindsdb.integrations.utilities.query_traversal import query_traversal
@@ -29,16 +29,125 @@ def _get_query_tables(query: ASTNode, resolve_function: callable, default_databa
     Returns:
         List[tuple]: list with (db/project name, table name, version)
     """
+
     tables = []
 
-    def _get_tables(node, is_table, **kwargs):
-        if is_table and isinstance(node, Identifier):
+    # Stack-based traversal to avoid Python call overhead
+    stack = [(query, False)]  # (node, is_table)
+    _Identifier = Identifier
+    _ast = ast
+    _isinstance = isinstance
+
+    # Jump-tables by type for fastest handling
+    SELECT = _ast.Select
+    UNION = (_ast.Union, _ast.Intersect, _ast.Except)
+    JOIN = _ast.Join
+    INSERT = _ast.Insert
+    UPDATE = _ast.Update
+    CREATETABLE = _ast.CreateTable
+    DELETE = _ast.Delete
+
+    while stack:
+        node, is_table = stack.pop()
+        # Hot path: Only pay callback/call cost if there is a chance
+        if is_table and _isinstance(node, _Identifier):
             table = resolve_function(node)
             if table[0] is None:
                 table = (default_database,) + table[1:]
             tables.append(table)
+            continue
 
-    query_traversal(query, _get_tables)
+        t = type(node)
+        if t is SELECT:
+            if node.from_table is not None:
+                stack.append((node.from_table, True))
+            for node2 in reversed(node.targets):
+                stack.append((node2, False))
+            if node.cte is not None:
+                for cte in reversed(node.cte):
+                    stack.append((cte.query, False))
+            if node.where is not None:
+                stack.append((node.where, False))
+            if node.group_by is not None:
+                for node2 in reversed(node.group_by):
+                    stack.append((node2, False))
+            if node.having is not None:
+                stack.append((node.having, False))
+            if node.order_by is not None:
+                for node2 in reversed(node.order_by):
+                    stack.append((node2, False))
+        elif t in UNION:
+            stack.append((node.left, False))
+            stack.append((node.right, False))
+        elif t is JOIN:
+            stack.append((node.right, True))
+            stack.append((node.left, True))
+            if node.condition is not None:
+                stack.append((node.condition, False))
+        elif isinstance(
+            node,
+            (ast.Function, ast.BinaryOperation, ast.UnaryOperation, ast.BetweenOperation, ast.Exists, ast.NotExists),
+        ):
+            for arg in reversed(node.args):
+                stack.append((arg, False))
+            if hasattr(node, "from_arg") and node.from_arg is not None:
+                stack.append((node.from_arg, False))
+        elif t is ast.WindowFunction:
+            stack.append((node.function, False))
+            if node.partition is not None:
+                for n in reversed(node.partition):
+                    stack.append((n, False))
+            if node.order_by is not None:
+                for n in reversed(node.order_by):
+                    stack.append((n, False))
+        elif t is ast.TypeCast:
+            stack.append((node.arg, False))
+        elif t is ast.Tuple:
+            for n in reversed(node.items):
+                stack.append((n, False))
+        elif t is INSERT:
+            if node.table is not None:
+                stack.append((node.table, True))
+            if node.values is not None:
+                for row in reversed(node.values):
+                    for item in reversed(row):
+                        stack.append((item, False))
+            if node.from_select is not None:
+                stack.append((node.from_select, False))
+        elif t is UPDATE:
+            if node.table is not None:
+                stack.append((node.table, True))
+            if node.where is not None:
+                stack.append((node.where, False))
+            if node.update_columns is not None:
+                for v in node.update_columns.values():
+                    stack.append((v, False))
+            if node.from_select is not None:
+                stack.append((node.from_select, False))
+        elif t is CREATETABLE:
+            if node.columns is not None:
+                for n in reversed(node.columns):
+                    stack.append((n, False))
+            if node.name is not None:
+                stack.append((node.name, True))
+            if node.from_select is not None:
+                stack.append((node.from_select, False))
+        elif t is DELETE:
+            if node.where is not None:
+                stack.append((node.where, False))
+        elif t is ast.OrderBy:
+            if node.field is not None:
+                stack.append((node.field, False))
+        elif t is ast.Case:
+            for condition, result in reversed(node.rules):
+                stack.append((condition, False))
+                stack.append((result, False))
+            if node.default is not None:
+                stack.append((node.default, False))
+        elif t is list:
+            for n in reversed(node):
+                stack.append((n, False))
+
     return tables
 
 
