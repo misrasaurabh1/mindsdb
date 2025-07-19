@@ -24,13 +24,8 @@ def python_to_duckdb_type(py_type):
 
 # duckdb doesn't like *args
 def function_maker(n_args, other_function):
-    return [
-        lambda: other_function(),
-        lambda arg_0: other_function(arg_0),
-        lambda arg_0, arg_1: other_function(arg_0, arg_1),
-        lambda arg_0, arg_1, arg_2: other_function(arg_0, arg_1, arg_2),
-        lambda arg_0, arg_1, arg_2, arg_3: other_function(arg_0, arg_1, arg_2, arg_2),
-    ][n_args]
+    # Use cached lambdas instead of rebuilding the list every time
+    return _function_variants[n_args](other_function)
 
 
 class BYOMFunctionsController:
@@ -235,3 +230,12 @@ class DuckDBFunctions:
     def register(self, connection):
         for name, info in self.functions.items():
             connection.create_function(name, info["callback"], info["input"], info["output"], null_handling="special")
+
+
+_function_variants = [
+    lambda other_function: lambda: other_function(),
+    lambda other_function: lambda arg_0: other_function(arg_0),
+    lambda other_function: lambda arg_0, arg_1: other_function(arg_0, arg_1),
+    lambda other_function: lambda arg_0, arg_1, arg_2: other_function(arg_0, arg_1, arg_2),
+    lambda other_function: lambda arg_0, arg_1, arg_2, arg_3: other_function(arg_0, arg_1, arg_2, arg_3),
+]
