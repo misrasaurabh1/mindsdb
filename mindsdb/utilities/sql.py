@@ -14,7 +14,7 @@ def _is_in_quotes(pos: int, quote_positions: list[tuple[int, int]]) -> bool:
 
 
 def clear_sql(sql: str) -> str:
-    '''Remove comments (--, /**/, and oracle-stype #) and trailing ';' from sql
+    """Remove comments (--, /**/, and oracle-stype #) and trailing ';' from sql
     Note: written mostly by LLM
 
     Args:
@@ -22,62 +22,82 @@ def clear_sql(sql: str) -> str:
 
     Returns:
         str: The cleared SQL query.
-    '''
+    """
     if sql is None:
         raise ValueError('sql query is None')
 
-    # positions of (', ", `)
-    quote_positions = []
-    for quote_char in ["'", '"', '`']:
-        i = 0
-        while i < len(sql):
-            if sql[i] == quote_char and (i == 0 or sql[i - 1] != '\\'):
-                start = i
-                i += 1
-                while i < len(sql) and (sql[i] != quote_char or sql[i - 1] == '\\'):
+    length = len(sql)
+    out = []
+    i = 0
+
+    # State variables
+    IN_NONE, IN_SQ, IN_DQ, IN_BQ = 0, 1, 2, 3
+    state = IN_NONE
+
+    while i < length:
+        c = sql[i]
+        if state == IN_NONE:
+            if c == "'":
+                out.append(c)
+                state = IN_SQ
+            elif c == '"':
+                out.append(c)
+                state = IN_DQ
+            elif c == '`':
+                out.append(c)
+                state = IN_BQ
+            elif c == '/' and i+1 < length and sql[i+1] == '*':
+                # skip /* ... */
+                i += 2
+                while i+1 < length and not (sql[i] == '*' and sql[i+1] == '/'):
                     i += 1
-                if i < len(sql):
-                    quote_positions.append((start, i))
-            i += 1
-
-    # del /* */ comments
-    result = []
-    i = 0
-    while i < len(sql):
-        if i + 1 < len(sql) and sql[i:i + 2] == '/*' and not _is_in_quotes(i, quote_positions):
-            # skip until */
-            i += 2
-            while i + 1 < len(sql) and sql[i:i + 2] != '*/':
+                if i+1 < length:
+                    i += 2
+                else:
+                    i += 1
+                continue
+            elif c == '-' and i+1 < length and sql[i+1] == '-':
+                # skip -- ... \n
+                i += 2
+                while i < length and sql[i] != '\n':
+                    i += 1
+                continue
+            elif c == '#':
+                # skip # ... \n
                 i += 1
-            if i + 1 < len(sql):
-                i += 2  # skip */
+                while i < length and sql[i] != '\n':
+                    i += 1
+                continue
             else:
+                out.append(c)
+        elif state == IN_SQ:
+            out.append(c)
+            if c == '\\' and i+1 < length:
+                out.append(sql[i+1])
                 i += 1
-        else:
-            result.append(sql[i])
-            i += 1
-
-    sql = ''.join(result)
-
-    # del -- and # comments
-    result = []
-    i = 0
-    while i < len(sql):
-        if i + 1 < len(sql) and sql[i:i + 2] == '--' and not _is_in_quotes(i, quote_positions):
-            while i < len(sql) and sql[i] != '\n':
+            elif c == "'":
+                state = IN_NONE
+        elif state == IN_DQ:
+            out.append(c)
+            if c == '\\' and i+1 < length:
+                out.append(sql[i+1])
                 i += 1
-        elif sql[i] == '#' and not _is_in_quotes(i, quote_positions):
-            while i < len(sql) and sql[i] != '\n':
+            elif c == '"':
+                state = IN_NONE
+        elif state == IN_BQ:
+            out.append(c)
+            if c == '\\' and i+1 < length:
+                out.append(sql[i+1])
                 i += 1
-        else:
-            result.append(sql[i])
-            i += 1
+            elif c == '`':
+                state = IN_NONE
+        i += 1
 
-    sql = ''.join(result)
+    sql = ''.join(out)
 
-    # del ; at the end
+    # Trailing semicolon and all whitespace
     sql = sql.rstrip()
-    if sql and sql[-1] == ';':
+    if sql.endswith(';'):
         sql = sql[:-1].rstrip()
 
     return sql.strip(' \n\t')
