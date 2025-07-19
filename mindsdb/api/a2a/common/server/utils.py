@@ -6,9 +6,7 @@ from ...common.types import (
 from typing import List
 
 
-def are_modalities_compatible(
-    server_output_modes: List[str], client_output_modes: List[str]
-):
+def are_modalities_compatible(server_output_modes: List[str], client_output_modes: List[str]):
     """Modalities are compatible if they are both non-empty
     and there is at least one common element."""
     if client_output_modes is None or len(client_output_modes) == 0:
@@ -17,7 +15,8 @@ def are_modalities_compatible(
     if server_output_modes is None or len(server_output_modes) == 0:
         return True
 
-    return any(x in server_output_modes for x in client_output_modes)
+    # Use set intersection for faster lookup of common elements
+    return not set(server_output_modes).isdisjoint(client_output_modes)
 
 
 def new_incompatible_types_error(request_id):
