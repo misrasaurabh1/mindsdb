@@ -11,6 +11,7 @@ from mindsdb.integrations.libs.response import INF_SCHEMA_COLUMNS_NAMES
 from mindsdb.interfaces.data_catalog.data_catalog_reader import DataCatalogReader
 from mindsdb.api.mysql.mysql_proxy.libs.constants.mysql import MYSQL_DATA_TYPE, MYSQL_DATA_TYPE_COLUMNS_DEFAULT
 from mindsdb.api.executor.datahub.classes.tables_row import TABLES_ROW_TYPE, TablesRow
+from functools import lru_cache
 
 
 logger = log.getLogger(__name__)
@@ -497,13 +498,18 @@ class CollationsTable(Table):
 
     @classmethod
     def get_data(cls, **kwargs):
+        # Return cached DataFrame for best performance.
+        return cls._cached_df()
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _cached_df(cls):
+        # Static data and columns, cache the DataFrame object.
         data = [
             ["utf8_general_ci", "utf8", 33, "Yes", "Yes", 1, "PAD SPACE"],
             ["latin1_swedish_ci", "latin1", 8, "Yes", "Yes", 1, "PAD SPACE"],
         ]
-
-        df = pd.DataFrame(data, columns=cls.columns)
-        return df
+        return pd.DataFrame(data, columns=cls.columns)
 
 
 # Data Catalog tables
