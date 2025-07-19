@@ -205,13 +205,13 @@ class Error(PostgresMessage):
     message: bytes
 
     def __init__(self, severity: bytes, code: bytes, message: bytes):
+        super().__init__()
         self.identifier = PostgresBackendMessageIdentifier.ERROR
         self.backend_capable = True
         self.frontend_capable = False
         self.severity = severity
         self.code = code
         self.message = message
-        super().__init__()
 
     def send_internal(self, write_file: BinaryIO):
         self.get_packet_builder() \
@@ -226,7 +226,7 @@ class Error(PostgresMessage):
 
     @staticmethod
     def from_answer(error_code: bytes, error_message: bytes):
-        return Error(severity=b"ERROR", code=error_code, message=error_message)
+        return Error(b"ERROR", error_code, error_message)
 
 
 class ConnectionFailure(Error):
