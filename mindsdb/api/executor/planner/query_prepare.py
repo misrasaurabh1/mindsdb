@@ -140,7 +140,6 @@ class PreparedStatementPlanner:
         if self.planner.is_predictor(table):
             ds, table = self.planner.get_predictor_namespace_and_name_from_identifier(table)
             is_predictor = True
-
         else:
             ds, table = self.planner.resolve_database_table(table)
             is_predictor = False
@@ -148,15 +147,20 @@ class PreparedStatementPlanner:
         if table.alias is not None:
             # access by alias if table is having alias
             keys = [to_string(table.alias)]
-
         else:
             # access by table name, in all variants
+
+            # Optimization: Instead of building keys using inserts and joins in reverse,
+            # build all prefixes in one forwards pass, which is much faster.
+            parts = table.parts
             keys = []
-            parts = []
-            # in reverse order
-            for p in table.parts[::-1]:
-                parts.insert(0, p)
-                keys.append(".".join(parts))
+            if parts:
+                curr = parts[0]
+                keys.append(curr)
+                for p in parts[1:]:
+                    curr = curr + "." + p
+                    keys.append(curr)
+            # Equivalent to what the old loop does.
 
         # remember table
         tbl = Table(ds=ds, node=table, is_predictor=is_predictor)
