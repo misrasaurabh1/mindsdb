@@ -41,18 +41,16 @@ class TablesRow:
 
     @staticmethod
     def from_dict(data: dict):
-        del_keys = []
-        data = {k.upper(): v for k, v in data.items()}
-
-        # table is different column
-        if 'TABLE_NAME' not in data and 'NAME' in data:
-            data['TABLE_NAME'] = data['NAME']
-
-        for key in data:
-            if key not in TablesRow.__dataclass_fields__:
-                del_keys.append(key)
-
-        for key in del_keys:
-            del data[key]
-
-        return TablesRow(**data)
+        # Uppercase keys once, and handle 'TABLE_NAME'
+        fields = TablesRow.__dataclass_fields__
+        out = {}
+        got_table_name = False
+        for k, v in data.items():
+            k_up = k.upper()
+            if k_up == 'NAME' and 'TABLE_NAME' not in data and 'TABLE_NAME' not in out:
+                k_up = 'TABLE_NAME'
+                got_table_name = True
+            if k_up in fields and (k_up != 'TABLE_NAME' or got_table_name or 'TABLE_NAME' in data):
+                out[k_up] = v
+        # In the rare case 'NAME' is the only source of TABLE_NAME, ensured above
+        return TablesRow(**out)
