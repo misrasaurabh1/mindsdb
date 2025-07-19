@@ -11,7 +11,7 @@ from mindsdb_sql_parser.ast import ASTNode, Select, Identifier, Function, Consta
 from mindsdb.integrations.utilities.query_traversal import query_traversal
 from mindsdb.utilities import log
 from mindsdb.utilities.exception import format_db_error_message
-from mindsdb.utilities.functions import resolve_table_identifier, resolve_model_identifier
+from mindsdb.utilities.functions import resolve_model_identifier
 from mindsdb.utilities.json_encoder import CustomJSONEncoder
 from mindsdb.utilities.render.sqlalchemy_render import SqlalchemyRender
 
@@ -43,7 +43,27 @@ def _get_query_tables(query: ASTNode, resolve_function: callable, default_databa
 
 
 def get_query_tables(query: ASTNode, default_database: str = None) -> List[tuple]:
-    return _get_query_tables(query, resolve_table_identifier, default_database)
+    """
+    Find all tables/models in the query
+
+    Args:
+        query (ASTNode): query
+        default_database (str): database name that will be used if there is no db name in identifier
+
+    Returns:
+        List[tuple]: list with (db/project name, table name, version)
+    """
+    tables = []
+
+    def _append_table(node, is_table, **kwargs):
+        if is_table and isinstance(node, Identifier):
+            table = _resolve_table_identifier(node)
+            if table[0] is None:
+                table = (default_database,) + table[1:]
+            tables.append(table)
+
+    query_traversal(query, _append_table)
+    return tables
 
 
 def get_query_models(query: ASTNode, default_database: str = None) -> List[tuple]:
