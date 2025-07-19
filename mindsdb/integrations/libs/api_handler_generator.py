@@ -61,21 +61,19 @@ class APIEndpointParam:
 
 
 def find_common_url_prefix(urls):
-    if len(urls) == 0:
+    if not urls:
         return ''
-    urls = [
-        url.split('/')
-        for url in urls
-    ]
-
-    min_len = min(len(s) for s in urls)
-
-    for i in range(min_len):
-        for j in range(1, len(urls)):
-            if urls[j][i] != urls[0][i]:
-                return '/'.join(urls[0][:i])
-
-    return '/'.join(urls[0][:min_len])
+    # split once, reusing the result
+    split_urls = [url.split('/') for url in urls]
+    # Transpose to compare parts at each position
+    prefix = []
+    for parts in zip(*split_urls):
+        first = parts[0]
+        if all(part == first for part in parts):
+            prefix.append(first)
+        else:
+            break
+    return '/'.join(prefix)
 
 
 class OpenAPISpecParser:
