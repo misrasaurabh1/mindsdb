@@ -36,8 +36,15 @@ class TeamsTable(APIResource):
         client: MSGraphAPITeamsDelegatedPermissionsClient = self.handler.connect()
         teams = client.get_teams()
 
-        teams_df = pd.json_normalize(teams, sep="_")
-        teams_df = teams_df.reindex(columns=self.get_columns(), fill_value=None)
+        # Optimization: Avoid json_normalize and reindex for flat records.
+        columns = self.get_columns()
+        if teams and isinstance(teams[0], dict):
+            # Use DataFrame.from_records for flat lists of dicts; columns pre-selection avoids reindex
+            teams_df = pd.DataFrame.from_records(teams, columns=columns)
+        else:
+            # Fallback for unexpected structures: original slow method
+            teams_df = pd.json_normalize(teams, sep="_")
+            teams_df = teams_df.reindex(columns=columns, fill_value=None)
 
         return teams_df
 
