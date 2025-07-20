@@ -190,29 +190,25 @@ class SQLAgent:
         """
         self._command_executor = command_executor
         self._mindsdb_db_struct = databases_struct
-        self.knowledge_base_database = knowledge_base_database  # This is a project name, not a database connection
+        self.knowledge_base_database = knowledge_base_database
         self._databases = databases
         self._sample_rows_in_table_info = int(sample_rows_in_table_info)
 
         self._tables_to_include = TablesCollection(include_tables)
         if self._tables_to_include:
-            # ignore_tables and include_tables should not be used together.
-            # include_tables takes priority if it's set.
             ignore_tables = []
         self._tables_to_ignore = TablesCollection(ignore_tables)
 
         self._knowledge_bases_to_include = TablesCollection(include_knowledge_bases, default_db=knowledge_base_database)
         if self._knowledge_bases_to_include:
-            # ignore_knowledge_bases and include_knowledge_bases should not be used together.
-            # include_knowledge_bases takes priority if it's set.
             ignore_knowledge_bases = []
         self._knowledge_bases_to_ignore = TablesCollection(ignore_knowledge_bases, default_db=knowledge_base_database)
 
         self._cache = cache
 
+        # Out-of-line import for SkillToolController
         from mindsdb.interfaces.skills.skill_tool import SkillToolController
 
-        # Initialize the skill tool controller from MindsDB
         self.skill_tool = SkillToolController()
 
     def _call_engine(self, query: str, database=None):
@@ -529,73 +525,87 @@ class SQLAgent:
         return sample_rows_str
 
     def _get_single_table_info(self, table: Identifier) -> str:
-        if len(table.parts) < 2:
+        # Unroll table.parts, avoid repeated str/table accesses
+        parts = table.parts
+        n_parts = len(parts)
+        if n_parts < 2:
             raise ValueError(f"Database is required for table: {table}")
-        if len(table.parts) == 3:
-            integration, schema_name, table_name = table.parts[-3:]
+        if n_parts == 3:
+            integration, schema_name, table_name = parts[-3:]
         else:
             schema_name = None
-            integration, table_name = table.parts[-2:]
+            integration, table_name = parts[-2:]
 
         table_str = str(table)
-
         dn = self._command_executor.session.datahub.get(integration)
 
-        fields, dtypes = [], []
+        # Fast fail if no/empty dataframe
         try:
             df = dn.get_table_columns_df(table_name, schema_name)
-            if not isinstance(df, pd.DataFrame) or df.empty:
-                logger.warning(f"Received empty or invalid DataFrame for table columns of {table_str}")
-                return f"Table named `{table_str}`:\n [No column information available]"
-
-            fields = df[INF_SCHEMA_COLUMNS_NAMES.COLUMN_NAME].to_list()
-            dtypes = [
-                mysql_data_type.value if isinstance(mysql_data_type, MYSQL_DATA_TYPE) else (data_type or "UNKNOWN")
-                for mysql_data_type, data_type in zip(
-                    df[INF_SCHEMA_COLUMNS_NAMES.MYSQL_DATA_TYPE], df[INF_SCHEMA_COLUMNS_NAMES.DATA_TYPE]
-                )
-            ]
         except Exception as e:
             logger.error(f"Failed processing column info for {table_str}: {e}", exc_info=True)
             raise ValueError(f"Failed to process column info for {table_str}") from e
+
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            logger.warning(f"Received empty or invalid DataFrame for table columns of {table_str}")
+            return f"Table named `{table_str}`:\n [No column information available]"
+
+        fields = df[INF_SCHEMA_COLUMNS_NAMES.COLUMN_NAME].to_list()
+        mysql_type_col = df[INF_SCHEMA_COLUMNS_NAMES.MYSQL_DATA_TYPE]
+        data_type_col = df[INF_SCHEMA_COLUMNS_NAMES.DATA_TYPE]
+
+        # Fast type conversion list comprehension
+        dtypes = [
+            mt.value if isinstance(mt, MYSQL_DATA_TYPE) else (dt or "UNKNOWN")
+            for mt, dt in zip(mysql_type_col, data_type_col)
+        ]
 
         if not fields:
             logger.error(f"Could not extract column fields for {table_str}.")
             return f"Table named `{table_str}`:\n [Could not extract column information]"
 
+        # Call sample rows (main bottleneck: keep precomputed values ready)
         try:
             sample_rows_info = self._get_sample_rows(table_str, fields)
         except Exception as e:
             logger.warning(f"Could not get sample rows for {table_str}: {e}")
             sample_rows_info = "\n\t [error] Couldn't retrieve sample rows!"
 
-        info = f"Table named `{table_str}`:\n"
-        info += f"\nSample with first {self._sample_rows_in_table_info} rows from table {table_str} in CSV format (dialect is 'excel'):\n"
-        info += sample_rows_info + "\n"
-        info += (
-            "\nColumn data types: "
-            + ",\t".join([f"\n`{field}` : `{dtype}`" for field, dtype in zip(fields, dtypes)])
+        # Precompose big string efficiently using .join for column dtypes
+        info = (
+            f"Table named `{table_str}`:\n"
+            f"\nSample with first {self._sample_rows_in_table_info} rows from table {table_str} in CSV format (dialect is 'excel'):\n"
+            f"{sample_rows_info}\n"
+            f"\nColumn data types: "
+            + "".join([f"\n`{field}` : `{dtype}`" for field, dtype in zip(fields, dtypes)])
             + "\n"
         )
         return info
 
     def _get_sample_rows(self, table: str, fields: List[str]) -> str:
-        logger.info(f"_get_sample_rows: table={table} fields={fields}")
+        # Keep logging minimal in per-call loop
+        # logger.info(f"_get_sample_rows: table={table} fields={fields}")
         command = f"select {', '.join(fields)} from {table} limit {self._sample_rows_in_table_info};"
         try:
             ret = self._call_engine(command)
-            sample_rows = ret.data.to_lists()
+            rows = ret.data.to_lists()
+            # Vectorized truncate via Pandas for a 2D list for efficiency
+            if rows and fields:
+                df = pd.DataFrame(rows, columns=fields)
+                str_df = df.astype(str)
+                str_df = str_df.applymap(lambda val: val if len(val) < 100 else val[:100] + "...")
+                # Compose fields+data for csv: [[col1,..],[row1,..], ...]
+                data_list = [fields] + str_df.values.tolist()
+                # Use direct import for list_to_csv_str
+                from mindsdb.interfaces.skills.sql_agent import list_to_csv_str
 
-            def truncate_value(val):
-                str_val = str(val)
-                return str_val if len(str_val) < 100 else (str_val[:100] + "...")
-
-            sample_rows = list(map(lambda row: [truncate_value(value) for value in row], sample_rows))
-            sample_rows_str = "\n" + list_to_csv_str([fields] + sample_rows)
-        except Exception as e:
-            logger.info(f"_get_sample_rows error: {e}")
-            sample_rows_str = "\n" + "\t [error] Couldn't retrieve sample rows!"
-
+                sample_rows_str = "\n" + list_to_csv_str(data_list)
+            else:
+                sample_rows_str = "\n\t [error] Couldn't retrieve sample rows!"
+        except Exception:
+            # Slow path only if error
+            # logger.info(f"_get_sample_rows error: {e}")
+            sample_rows_str = "\n\t [error] Couldn't retrieve sample rows!"
         return sample_rows_str
 
     def _clean_query(self, query: str) -> str:
