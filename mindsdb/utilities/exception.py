@@ -1,6 +1,3 @@
-from textwrap import indent
-
-
 class BaseEntityException(Exception):
     """Base exception for entitys errors
 
@@ -54,27 +51,41 @@ def format_db_error_message(
     Returns:
         str: The formatted error message.
     """
-    error_message = "Failed to execute external database query during query processing."
+
+    # Using a list and join for better performance.
+    lines = []
     if is_external:
-        error_message = (
+        lines.append(
             "An error occurred while executing a derived query on the external "
             "database during processing of your original SQL query."
         )
     else:
-        error_message = (
+        lines.append(
             "An error occurred while processing an internally generated query derived from your original SQL statement."
         )
+
     if db_name is not None or db_type is not None:
-        error_message += "\n\nDatabase Details:"
+        lines.append("\nDatabase Details:")
         if db_name is not None:
-            error_message += f"\n- Name: {db_name}"
+            lines.append(f"- Name: {db_name}")
         if db_type is not None:
-            error_message += f"\n- Type: {db_type}"
+            lines.append(f"- Type: {db_type}")
 
     if db_error_msg is not None:
-        error_message += f"\n\nError:\n{indent(db_error_msg, '    ')}"
+        lines.append("\nError:")
+        lines.append(_fast_indent(db_error_msg, "    "))
 
     if failed_query is not None:
-        error_message += f"\n\nFailed Query:\n{indent(failed_query, '    ')}"
+        lines.append("\nFailed Query:")
+        lines.append(_fast_indent(failed_query, "    "))
 
-    return error_message
+    return "\n".join(lines)
+
+
+def _fast_indent(text: str, prefix: str) -> str:
+    # Fast indent using plain string manipulation.
+    # This preserves blank lines and matches textwrap.indent for this manual use.
+    if not text:
+        return ""
+    lines = text.splitlines(keepends=True)
+    return "".join(prefix + line if line.strip() else line for line in lines)
