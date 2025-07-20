@@ -148,46 +148,46 @@ def project_dataframe(df, targets, table_columns):
     case-insensitive projection
     'select A' and 'select a' return different column case but with the same content
     """
-
-    columns = []
+    # Precompute a case-insensitive column map
     df_cols_idx = {col.lower(): col for col in df.columns}
-    df_col_rename = {}
+    columns = []
+    rename_map = {}
 
     for target in targets:
         if isinstance(target, ast.Star):
+            # Fastest: direct bulk extend, and compute rename_map in one sweep
+            lc_map = {col.lower(): col for col in table_columns}
             for col in table_columns:
                 col_df = df_cols_idx.get(col.lower())
-                if col_df is not None:
-                    df_col_rename[col_df] = col
+                if col_df is not None and col_df != col:
+                    rename_map[col_df] = col
                 columns.append(col)
-
             break
         elif isinstance(target, ast.Identifier):
             col = target.parts[-1]
             col_df = df_cols_idx.get(col.lower())
             if col_df is not None:
                 if hasattr(target, "alias") and isinstance(target.alias, ast.Identifier):
-                    df_col_rename[col_df] = target.alias.parts[0]
-                else:
-                    df_col_rename[col_df] = col
+                    rename_map[col_df] = target.alias.parts[0]
+                elif col_df != col:
+                    rename_map[col_df] = col
             columns.append(col)
         else:
             raise NotImplementedError
 
     if len(df) == 0:
-        df = pd.DataFrame([], columns=columns)
-    else:
-        # add absent columns
-        for col in set(columns) & set(df.columns) ^ set(columns):
-            df[col] = None
+        # Directly return DataFrame with needed structure
+        return pd.DataFrame([], columns=columns)
 
-        # filter by columns
-        df = df[columns]
+    # No need to add absent columns ourselves,
+    # pandas DataFrame indexing auto fills with NaN/None
+    # Just reindex to columns (this is very fast)
+    df2 = df.reindex(columns=columns, copy=False)
 
-    # adapt column names to projection
-    if len(df_col_rename) > 0:
-        df.rename(columns=df_col_rename, inplace=True)
-    return df
+    # Rename columns if needed; avoid in-place ops
+    if rename_map:
+        df2 = df2.rename(columns=rename_map)
+    return df2
 
 
 def filter_dataframe(df: pd.DataFrame, conditions: list):
