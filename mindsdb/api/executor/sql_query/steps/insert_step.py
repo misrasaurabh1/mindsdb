@@ -19,7 +19,6 @@ class InsertToTableCall(BaseStepCall):
 
         if type(step) == SaveToTable:
             is_create = True
-
             if step.is_replace:
                 is_replace = True
 
@@ -32,7 +31,7 @@ class InsertToTableCall(BaseStepCall):
 
         dn = self.session.datahub.get(integration_name)
 
-        if hasattr(dn, "create_table") is False:
+        if not hasattr(dn, "create_table"):
             raise NotSupportedYet(f"Creating table in '{integration_name}' is not supported")
 
         if step.dataframe is not None:
@@ -40,57 +39,68 @@ class InsertToTableCall(BaseStepCall):
         elif step.query is not None:
             data = ResultSet()
             if step.query.columns is None:
-                # Is query like: INSERT INTO table VALUES (...)
+                # Query is: INSERT INTO table VALUES (...)
                 table_columns_df = dn.get_table_columns_df(str(table_name))
                 columns_names = table_columns_df[INF_SCHEMA_COLUMNS_NAMES.COLUMN_NAME].to_list()
-                for column_name in columns_names:
-                    data.add_column(Column(name=column_name))
+                # Bulk create columns
+                data._columns.extend(Column(name=col) for col in columns_names)  # <--- OPTIMIZED bulk add
             else:
-                # Is query like: INSERT INTO table (column_name, ...) VALUES (...)
-                for col in step.query.columns:
-                    data.add_column(Column(name=col.name))
+                # Query is: INSERT INTO table (column_name, ...) VALUES (...)
+                data._columns.extend(Column(name=col.name) for col in step.query.columns)  # <--- OPTIMIZED bulk add
 
-            records = []
-            for row in step.query.values:
-                record = []
-                for v in row:
-                    if isinstance(v, Identifier) and v.parts[0] == "None":
-                        # Allow explicitly inserting NULL values.
-                        record.append(None)
-                        continue
-                    # Value is a constant
-                    record.append(v.value)
-                records.append(record)
+            # Fast construction of value records as a list
+            values_are_identifiers = False
+            if step.query.values and any(isinstance(v, Identifier) for row in step.query.values for v in row):
+                # Only if any value is an Identifier, enable slow path
+                values_are_identifiers = True
 
+            # Fast: no Identifiers to check, use list comprehension
+            if not values_are_identifiers:
+                records = [[v.value for v in row] for row in step.query.values]
+            else:
+                records = []
+                for row in step.query.values:
+                    record = []
+                    for v in row:
+                        if isinstance(v, Identifier) and v.parts[0] == "None":
+                            record.append(None)
+                            continue
+                        record.append(v.value)
+                    records.append(record)
             data.add_raw_values(records)
         else:
             raise LogicError(f"Data not found for insert: {step}")
 
-        #  del 'service' columns
-        for col in data.find_columns("__mindsdb_row_id"):
-            data.del_column(col)
-        for col in data.find_columns("__mdb_forecast_offset"):
+        # Remove 'service' columns using a single pass
+        service_cols = {"__mindsdb_row_id", "__mdb_forecast_offset"}
+        # Keep reference to columns to avoid repeated function call
+        columns_to_remove = [col for col in data.columns if col.name in service_cols]
+        for col in columns_to_remove:
             data.del_column(col)
 
-        # region del columns filtered at projection step
+        # region del columns filtered at projection step (faster set-based filtering)
         columns_list = self.get_columns_list()
         if columns_list is not None:
-            filtered_column_names = [x.name for x in columns_list]
-            for col in data.columns:
-                if col.name.startswith("predictor."):
-                    continue
-                if col.name in filtered_column_names:
-                    continue
+            filtered_column_names = {x.name for x in columns_list}
+            to_remove = [
+                col
+                for col in data.columns
+                if not col.name.startswith("predictor.") and col.name not in filtered_column_names
+            ]
+            for col in to_remove:
                 data.del_column(col)
         # endregion
 
-        # drop double names
-        col_names = set()
+        # Drop double aliases with a single sweep (preserve order, more efficient)
+        seen_aliases = set()
+        cols_to_drop = []
         for col in data.columns:
-            if col.alias in col_names:
-                data.del_column(col)
+            if col.alias in seen_aliases:
+                cols_to_drop.append(col)
             else:
-                col_names.add(col.alias)
+                seen_aliases.add(col.alias)
+        for col in cols_to_drop:
+            data.del_column(col)
 
         response = dn.create_table(
             table_name=table_name, result_set=data, is_replace=is_replace, is_create=is_create, params=step.params
