@@ -36,7 +36,7 @@ def build_stream_url_last_event(basic_url, stream_name):
 
 
 def build_next_url(link_url, read_batch_size):
-    return re.sub(r"/(\d+)$", "/" + str(read_batch_size), link_url)
+    return _pattern.sub(f"/{read_batch_size}", link_url)
 
 
 def entry_to_df(entry):
@@ -51,3 +51,5 @@ def entry_to_df(entry):
 def get_auth_string(username, password):
     credentials = username + ':' + password
     return 'Basic ' + str(base64.b64encode(credentials.encode('utf-8')).decode('utf-8'))
+
+_pattern = re.compile(r"/(\d+)$")
