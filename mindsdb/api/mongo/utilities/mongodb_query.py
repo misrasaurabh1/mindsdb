@@ -72,12 +72,15 @@ class MongoQuery:
          "db_test.fish.find({a:1}, {b:2}).sort({c:3})"
         """
 
+        encoder = MongoJSONEncoder()  # Reuse the encoder for all args
         call_str = f'db.{self.collection}'
+        # Use a list to store all steps then join at the end to reduce string concat overhead
+        method_calls = []
         for step in self.pipeline:
-            args_str = []
-            for arg in step['args']:
-                args_str.append(MongoJSONEncoder().encode(arg))
-            call_str += f'.{step["method"]}({",".join(args_str)})'
+            # Use list comprehension for better efficiency
+            args_str = [encoder.encode(arg) for arg in step['args']]
+            method_calls.append(f'.{step["method"]}({",".join(args_str)})')
+        call_str += ''.join(method_calls)
         return call_str
 
     def __repr__(self):
