@@ -149,45 +149,59 @@ def project_dataframe(df, targets, table_columns):
     'select A' and 'select a' return different column case but with the same content
     """
 
-    columns = []
+    # Only create this once
     df_cols_idx = {col.lower(): col for col in df.columns}
-    df_col_rename = {}
+    columns = []
+    actual_columns = []
+    rename_map = {}
 
     for target in targets:
         if isinstance(target, ast.Star):
+            # Star: use all table_columns, mapping existing
             for col in table_columns:
-                col_df = df_cols_idx.get(col.lower())
-                if col_df is not None:
-                    df_col_rename[col_df] = col
+                col_l = col.lower()
+                if col_l in df_cols_idx:
+                    actual_col = df_cols_idx[col_l]
+                    actual_columns.append(actual_col)
+                    rename_map[actual_col] = col
+                else:
+                    # Column not present, will be filled as missing below
+                    actual_columns.append(col)
                 columns.append(col)
-
             break
         elif isinstance(target, ast.Identifier):
             col = target.parts[-1]
-            col_df = df_cols_idx.get(col.lower())
-            if col_df is not None:
+            col_l = col.lower()
+            if col_l in df_cols_idx:
+                actual_col = df_cols_idx[col_l]
+                actual_columns.append(actual_col)
+                # Use alias if present, else match the requested name casing
                 if hasattr(target, "alias") and isinstance(target.alias, ast.Identifier):
-                    df_col_rename[col_df] = target.alias.parts[0]
+                    rename_map[actual_col] = target.alias.parts[0]
                 else:
-                    df_col_rename[col_df] = col
+                    rename_map[actual_col] = col
+            else:
+                # Column not present, will be filled as missing below
+                actual_columns.append(col)
             columns.append(col)
         else:
             raise NotImplementedError
 
+    # Use pd.DataFrame.reindex for fast missing-column support and order preservation
     if len(df) == 0:
-        df = pd.DataFrame([], columns=columns)
+        df_proj = pd.DataFrame([], columns=columns)
     else:
-        # add absent columns
-        for col in set(columns) & set(df.columns) ^ set(columns):
-            df[col] = None
+        # Avoid manual assignment for missing columns; Pandas reindex is much faster
+        df_proj = df.reindex(columns=actual_columns)
+        # Adapt column names to projection
+        if rename_map:
+            # Renaming only mapped columns, other columns remain as is
+            df_proj.columns = [rename_map.get(col, col) for col in df_proj.columns]
+        # Ensure the output columns (case+order) match the outer projection exactly
+        if list(df_proj.columns) != columns:
+            df_proj.columns = columns
 
-        # filter by columns
-        df = df[columns]
-
-    # adapt column names to projection
-    if len(df_col_rename) > 0:
-        df.rename(columns=df_col_rename, inplace=True)
-    return df
+    return df_proj
 
 
 def filter_dataframe(df: pd.DataFrame, conditions: list):
