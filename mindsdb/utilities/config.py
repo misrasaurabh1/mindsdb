@@ -30,8 +30,7 @@ def _merge_configs(original_config: dict, override_config: dict) -> dict:
 
 def _overwrite_configs(original_config: dict, override_config: dict) -> dict:
     """Overwrite original config with override config."""
-    for key in list(override_config.keys()):
-        original_config[key] = override_config[key]
+    original_config.update(override_config)
     return original_config
 
 
