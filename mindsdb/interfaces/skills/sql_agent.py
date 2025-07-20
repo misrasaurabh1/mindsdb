@@ -107,29 +107,30 @@ class TablesCollection:
             elif schema is None:
                 self._dbs[db].add(tbl)
             else:
-                if schema not in self._schemas[db]:
-                    self._schemas[db][schema] = set()
-                self._schemas[db][schema].add(tbl)
+                self._schemas[db].setdefault(schema, set()).add(tbl)
 
             if "*" in tbl:
                 self.has_wildcard = True
             self.databases.add(db)
 
     def _get_paths(self, table: Identifier) -> Tuple:
-        # split identifier to db, schema, table name
-        schema = None
-        db = None
-
-        match [x.lower() for x in table.parts]:
-            case [tbl]:
-                pass
-            case [db, tbl]:
-                pass
-            case [db, schema, tbl]:
-                pass
-            case _:
-                raise NotImplementedError
-        return db, schema, tbl.lower()
+        # split identifier to db, schema, table name (optimized, no match/case)
+        parts = table.parts
+        n = len(parts)
+        if n == 1:
+            tbl = parts[0].lower()
+            return None, None, tbl
+        elif n == 2:
+            db = parts[0].lower()
+            tbl = parts[1].lower()
+            return db, None, tbl
+        elif n == 3:
+            db = parts[0].lower()
+            schema = parts[1].lower()
+            tbl = parts[2].lower()
+            return db, schema, tbl
+        else:
+            raise NotImplementedError
 
     def match(self, table: Identifier) -> bool:
         # Check if input table matches to tables in collection
