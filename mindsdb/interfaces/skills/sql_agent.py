@@ -59,23 +59,23 @@ def split_table_name(table_name: str) -> List[str]:
         'input': '`aaa`.`bbb.ccc`', 'output': ['aaa', 'bbb.ccc']
     """
     result = []
-    current = ""
+    current = []
     in_backticks = False
 
-    i = 0
-    while i < len(table_name):
-        if table_name[i] == "`":
+    for ch in table_name:
+        if ch == "`":
             in_backticks = not in_backticks
-        elif table_name[i] == "." and not in_backticks:
+        elif ch == "." and not in_backticks:
             if current:
-                result.append(current.strip("`"))
-                current = ""
+                part = "".join(current)
+                result.append(part.strip("`"))
+                current.clear()
         else:
-            current += table_name[i]
-        i += 1
+            current.append(ch)
 
     if current:
-        result.append(current.strip("`"))
+        part = "".join(current)
+        result.append(part.strip("`"))
 
     return result
 
