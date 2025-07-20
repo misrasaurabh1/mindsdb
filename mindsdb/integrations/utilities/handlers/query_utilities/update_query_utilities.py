@@ -18,9 +18,14 @@ class UPDATEQueryParser(BaseQueryParser):
     supported_columns : List[Text], Optional
         List of columns supported by the table for updating.
     """
+
     def __init__(self, query: ast.Update, supported_columns: Optional[List[Text]] = None):
         super().__init__(query)
-        self.supported_columns = supported_columns
+        # Convert supported_columns to set for faster lookup, if available and not already a set
+        if supported_columns is not None and not isinstance(supported_columns, set):
+            self.supported_columns = set(supported_columns)
+        else:
+            self.supported_columns = supported_columns
 
     def parse_query(self):
         """
@@ -35,15 +40,20 @@ class UPDATEQueryParser(BaseQueryParser):
         """
         Parses the SET clause of the query and returns a dictionary of columns and values to update.
         """
-        values = list(self.query.update_columns.items())
-
         values_to_update = {}
-        for value in values:
-            if self.supported_columns:
-                if value[0] not in self.supported_columns:
-                    raise UnsupportedColumnException(f"Unsupported column: {value[0]}")
 
-            values_to_update[value[0]] = value[1].value
+        update_columns = self.query.update_columns
+        supported_columns = self.supported_columns
+
+        if supported_columns:
+            # Membership testing in a set is O(1) instead of O(N)
+            for col, val in update_columns.items():
+                if col not in supported_columns:
+                    raise UnsupportedColumnException(f"Unsupported column: {col}")
+                values_to_update[col] = val.value
+        else:
+            for col, val in update_columns.items():
+                values_to_update[col] = val.value
 
         return values_to_update
 
