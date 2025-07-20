@@ -44,7 +44,9 @@ class NPIntCodec(TypeCodec):
     bson_type = bson.int64.Int64
 
     def transform_python(self, value):
-        return bson.int64.Int64(value)
+        # Use direct type call: this is already the fastest way; 
+        # however, we can cache the constructor to improve attribute lookup speed.
+        return _bson_int64_constructor(value)
 
     def transform_bson(self, value):
         return np.int(value)
@@ -386,3 +388,5 @@ def run_server(config):
     SocketServer.TCPServer.allow_reuse_address = True
     with MongoServer(config) as srv:
         srv.serve_forever()
+
+_bson_int64_constructor = bson.int64.Int64
