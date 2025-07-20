@@ -41,11 +41,12 @@ def build_next_url(link_url, read_batch_size):
 
 def entry_to_df(entry):
     # All events in EventStoreDB have the following:
-    fields = ['eventId', 'eventType', 'eventNumber']
-    df = pd.DataFrame([[entry['eventId'], entry['eventType'], entry['eventNumber']]],
-                      columns=fields)
+    # Combine event fields directly after normalizing data for efficiency
     data = pd.json_normalize(json.loads(entry['data']), sep='_')
-    return df.merge(data, how='cross')
+    data.insert(0, 'eventNumber', entry['eventNumber'])
+    data.insert(0, 'eventType', entry['eventType'])
+    data.insert(0, 'eventId', entry['eventId'])
+    return data
 
 
 def get_auth_string(username, password):
