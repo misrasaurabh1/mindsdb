@@ -141,17 +141,20 @@ class AnnotationsTable(APITable):
             self.handler.connect()
 
         try:
-            method = getattr(self.handler.api, 'children')
-            result = method(parent_item_id, itemType='annotation')
+            children_method = self.handler.api.children
+            result = children_method(parent_item_id, itemType='annotation')
 
             if isinstance(result, dict):
                 return pd.DataFrame([result.get('data', {})])
-            if isinstance(result, list) and all(isinstance(item, dict) for item in result):
-                data_list = [item.get('data', {}) for item in result]
-                return pd.DataFrame(data_list)
-
+            elif isinstance(result, list) and result and isinstance(result[0], dict):
+                # Use generator expression for immediate DataFrame construction.
+                return pd.DataFrame((item.get('data', {}) for item in result))
+            elif isinstance(result, list) and not result:
+                return pd.DataFrame()
         except Exception as e:
-            logger.error(f"Error fetching children for parent item ID {parent_item_id}: {e}")
-            raise e
+            logger.error(
+                "Error fetching children for parent item ID %s: %s", parent_item_id, e
+            )
+            raise
 
         return pd.DataFrame()
