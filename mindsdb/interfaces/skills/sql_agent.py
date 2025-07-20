@@ -98,6 +98,10 @@ class TablesCollection:
         self.databases = set()
         self._default_db = default_db
 
+        # Precompile fnmatch patterns for faster matching
+        self._compiled_schemas = defaultdict(dict)  # db -> schema -> [regex]
+        self._compiled_dbs = defaultdict(list)  # db -> [regex]
+
         for name in items:
             if not isinstance(name, Identifier):
                 name = Identifier(name)
@@ -111,25 +115,36 @@ class TablesCollection:
                     self._schemas[db][schema] = set()
                 self._schemas[db][schema].add(tbl)
 
+            # Detect wildcards
             if "*" in tbl:
                 self.has_wildcard = True
             self.databases.add(db)
 
+        # Precompile fnmatch patterns for schema and db tables
+        for db, schemas in self._schemas.items():
+            for schema, tbls in schemas.items():
+                self._compiled_schemas[db][schema] = [
+                    re.compile(fnmatch.translate(pattern)) if "*" in pattern or "?" in pattern else pattern
+                    for pattern in tbls
+                ]
+        for db, tbls in self._dbs.items():
+            self._compiled_dbs[db] = [
+                re.compile(fnmatch.translate(pattern)) if "*" in pattern or "?" in pattern else pattern
+                for pattern in tbls
+            ]
+
     def _get_paths(self, table: Identifier) -> Tuple:
         # split identifier to db, schema, table name
-        schema = None
-        db = None
-
-        match [x.lower() for x in table.parts]:
-            case [tbl]:
-                pass
-            case [db, tbl]:
-                pass
-            case [db, schema, tbl]:
-                pass
-            case _:
-                raise NotImplementedError
-        return db, schema, tbl.lower()
+        parts_lc = [x.lower() for x in table.parts]
+        ln = len(parts_lc)
+        if ln == 1:
+            return None, None, parts_lc[0]
+        elif ln == 2:
+            return parts_lc[0], None, parts_lc[1]
+        elif ln == 3:
+            return parts_lc[0], parts_lc[1], parts_lc[2]
+        else:
+            raise NotImplementedError
 
     def match(self, table: Identifier) -> bool:
         # Check if input table matches to tables in collection
@@ -139,14 +154,31 @@ class TablesCollection:
             if tbl in self._no_db_tables:
                 return True
             if self._default_db is not None:
+                # direct construction, avoid recursion if possible
                 return self.match(Identifier(parts=[self._default_db, tbl]))
 
-        if schema is not None:
-            if any([fnmatch.fnmatch(tbl, pattern) for pattern in self._schemas[db].get(schema, [])]):
-                return True
+        # Prefer precompiled regex if present for performance
+        if schema is not None and db in self._compiled_schemas and schema in self._compiled_schemas[db]:
+            patterns = self._compiled_schemas[db][schema]
+            for pat in patterns:
+                if isinstance(pat, str):
+                    if tbl == pat:
+                        return True
+                else:
+                    if pat.fullmatch(tbl):
+                        return True
+            return False
 
         # table might be specified without schema
-        return any([fnmatch.fnmatch(tbl, pattern) for pattern in self._dbs[db]])
+        pats = self._compiled_dbs.get(db, ())
+        for pat in pats:
+            if isinstance(pat, str):
+                if tbl == pat:
+                    return True
+            else:
+                if pat.fullmatch(tbl):
+                    return True
+        return False
 
     def __bool__(self):
         return len(self.items) > 0
