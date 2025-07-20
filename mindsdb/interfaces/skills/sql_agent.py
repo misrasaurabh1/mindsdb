@@ -80,6 +80,12 @@ def split_table_name(table_name: str) -> List[str]:
     return result
 
 
+def truncate_value(val):
+    # Fast truncate outside of get_kb_sample_rows to avoid repeated redeclaration
+    str_val = str(val)
+    return str_val if len(str_val) < 100 else (str_val[:100] + "...")
+
+
 class TablesCollection:
     """
     Collection of identifiers.
@@ -432,16 +438,17 @@ class SQLAgent:
         """
 
         kbs_info = []
+        get_cache = self._cache.get if self._cache else None
+        set_cache = self._cache.set if self._cache else None
+        prefix = f"{ctx.company_id}_"
         for kb in kb_names:
-            key = f"{ctx.company_id}_{kb}_info"
-            kb_info = self._cache.get(key) if self._cache else None
-            if True or kb_info is None:
+            key = f"{prefix}{kb}_info"
+            kb_info = get_cache(key) if get_cache else None
+            if kb_info is None:
                 kb_info = self.get_kb_sample_rows(kb)
-                if self._cache:
-                    self._cache.set(key, kb_info)
-
+                if set_cache:
+                    set_cache(key, kb_info)
             kbs_info.append(kb_info)
-
         return "\n\n".join(kbs_info)
 
     def get_table_info(self, table_names: Optional[List[str]] = None) -> str:
@@ -510,22 +517,19 @@ class SQLAgent:
         Returns:
             str: A string containing the sample rows from the knowledge base.
         """
-        logger.info(f"_get_sample_rows: knowledge base={kb_name}")
+        # Only format log message if logger level is enabled
+        if logger.isEnabledFor(20):  # INFO
+            logger.info(f"_get_sample_rows: knowledge base={kb_name}")
         command = f"select * from {kb_name} limit 10;"
         try:
             ret = self._call_engine(command)
             sample_rows = ret.data.to_lists()
-
-            def truncate_value(val):
-                str_val = str(val)
-                return str_val if len(str_val) < 100 else (str_val[:100] + "...")
-
-            sample_rows = list(map(lambda row: [truncate_value(value) for value in row], sample_rows))
-            sample_rows_str = "\n" + f"{kb_name}:" + list_to_csv_str(sample_rows)
+            # Use fast list comprehension; 'truncate_value' lifted out for speed
+            sample_rows = [[truncate_value(val) for val in row] for row in sample_rows]
+            sample_rows_str = f"\n{kb_name}:" + list_to_csv_str(sample_rows)
         except Exception as e:
             logger.info(f"_get_sample_rows error: {e}")
             sample_rows_str = "\n" + "\t [error] Couldn't retrieve sample rows!"
-
         return sample_rows_str
 
     def _get_single_table_info(self, table: Identifier) -> str:
