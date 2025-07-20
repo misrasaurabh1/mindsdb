@@ -55,7 +55,8 @@ class DateCodec(TypeCodec):
     bson_type = bson.datetime.datetime
 
     def transform_python(self, value):
-        return dt.datetime(value.year, value.month, value.day)
+        # Faster attribute access via _datetime
+        return _datetime(value.year, value.month, value.day)
 
     def transform_bson(self, value):
         return dt.datetime(value.year, value.month, value.day)
@@ -386,3 +387,5 @@ def run_server(config):
     SocketServer.TCPServer.allow_reuse_address = True
     with MongoServer(config) as srv:
         srv.serve_forever()
+
+_datetime = dt.datetime
