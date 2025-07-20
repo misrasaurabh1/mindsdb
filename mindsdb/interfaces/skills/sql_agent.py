@@ -18,6 +18,7 @@ from mindsdb.integrations.libs.response import INF_SCHEMA_COLUMNS_NAMES
 from mindsdb.api.mysql.mysql_proxy.libs.constants.mysql import MYSQL_DATA_TYPE
 from mindsdb.utilities.config import config
 from mindsdb.interfaces.data_catalog.data_catalog_reader import DataCatalogReader
+from functools import lru_cache
 
 logger = log.getLogger(__name__)
 
@@ -139,20 +140,52 @@ class TablesCollection:
             if tbl in self._no_db_tables:
                 return True
             if self._default_db is not None:
-                return self.match(Identifier(parts=[self._default_db, tbl]))
+                # Avoid recursion by only calling once with constructed Identifier
+                db = self._default_db
+                # Try matching as if default db applied
+                table = Identifier(parts=[db, tbl])
+                db, schema, tbl = self._get_paths(table)
+                # fallthrough to same logic as below
 
         if schema is not None:
-            if any([fnmatch.fnmatch(tbl, pattern) for pattern in self._schemas[db].get(schema, [])]):
+            patterns = self._schemas[db].get(schema)
+            if patterns:
+                # Use generator expression with any(), stops on first match
+                for pattern in patterns:
+                    if fnmatch.fnmatch(tbl, pattern):
+                        return True
+
+        db_tables = self._dbs[db]
+        for pattern in db_tables:
+            if fnmatch.fnmatch(tbl, pattern):
                 return True
 
-        # table might be specified without schema
-        return any([fnmatch.fnmatch(tbl, pattern) for pattern in self._dbs[db]])
+        return False
 
     def __bool__(self):
         return len(self.items) > 0
 
     def __repr__(self):
         return f"Tables({self.items})"
+
+    @staticmethod
+    @lru_cache(maxsize=8192)
+    def _get_paths_cached(parts_tuple):
+        # This code remains identical: just split the tuple to db, schema, tbl as in the original
+        schema = None
+        db = None
+        parts = [x.lower() for x in parts_tuple]
+        match parts:
+            case [tbl]:
+                pass
+            case [db_val, tbl]:
+                db = db_val
+            case [db_val, schema_val, tbl]:
+                db = db_val
+                schema = schema_val
+            case _:
+                raise NotImplementedError
+        return db, schema, parts[-1]
 
 
 class SQLAgent:
@@ -345,11 +378,15 @@ class SQLAgent:
 
         # Filter knowledge bases based on ignore list
         kb_names = []
+        kb_db = self.knowledge_base_database
+        kb_include = self._knowledge_bases_to_include
+        kb_ignore = self._knowledge_bases_to_ignore
+        include_enabled = bool(kb_include)
         for kb_name in self.get_all_knowledge_base_names():
-            kb = Identifier(parts=[self.knowledge_base_database, kb_name])
-            if self._knowledge_bases_to_include and not self._knowledge_bases_to_include.match(kb):
+            kb_identifier = Identifier(parts=[kb_db, kb_name])
+            if include_enabled and not kb_include.match(kb_identifier):
                 continue
-            if not self._knowledge_bases_to_ignore.match(kb):
+            if not kb_ignore.match(kb_identifier):
                 kb_names.append(kb_name)
         return kb_names
 
@@ -374,9 +411,7 @@ class SQLAgent:
             result = self._command_executor.execute_command(ast_query, database_name=self.knowledge_base_database)
 
             # Filter knowledge bases based on ignore list
-            kb_names = []
-            for row in result.data.records:
-                kb_names.append(row["NAME"])
+            kb_names = [row["NAME"] for row in result.data.records]
 
             # if self._cache:
             #     self._cache.set(cache_key, set(kb_names))
