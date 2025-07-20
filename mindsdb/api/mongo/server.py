@@ -69,8 +69,15 @@ type_registry = TypeRegistry([NPIntCodec(), DateCodec()], fallback_encoder=fallb
 
 
 def unpack(format, buffer, start=0):
-    end = start + struct.calcsize(format)
-    return struct.unpack(format, buffer[start:end])[0], end
+    # Use a simple cache for Struct objects to avoid repeated parsing of format strings
+    try:
+        s = _struct_cache[format]
+    except KeyError:
+        s = struct.Struct(format)
+        _struct_cache[format] = s
+    end = start + s.size
+    # struct.Struct.unpack_from does not require extracting a sub-buffer
+    return s.unpack_from(buffer, start)[0], end
 
 
 def get_utf8_string(buffer, start=0):
@@ -386,3 +393,5 @@ def run_server(config):
     SocketServer.TCPServer.allow_reuse_address = True
     with MongoServer(config) as srv:
         srv.serve_forever()
+
+_struct_cache = {}
