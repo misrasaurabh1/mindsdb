@@ -13,17 +13,19 @@ from appdirs import user_data_dir
 
 
 def _merge_key_recursive(target_dict, source_dict, key):
-    if key not in target_dict:
-        target_dict[key] = source_dict[key]
-    elif not isinstance(target_dict[key], dict) or not isinstance(source_dict[key], dict):
-        target_dict[key] = source_dict[key]
-    else:
-        for k in list(source_dict[key].keys()):
-            _merge_key_recursive(target_dict[key], source_dict[key], k)
+    target_val = target_dict.get(key)
+    source_val = source_dict[key]
+    # Fast path: target missing or non-dict types
+    if target_val is None or not (isinstance(target_val, dict) and isinstance(source_val, dict)):
+        target_dict[key] = source_val
+        return
+    # Both are dicts, merge recursively
+    for k in source_val:
+        _merge_key_recursive(target_val, source_val, k)
 
 
 def _merge_configs(original_config: dict, override_config: dict) -> dict:
-    for key in list(override_config.keys()):
+    for key in override_config:
         _merge_key_recursive(original_config, override_config, key)
     return original_config
 
