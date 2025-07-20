@@ -1,36 +1,40 @@
-class Responder():
+class Responder:
     def __init__(self, when=None, result=None):
-        if when is not None:
-            self.when = when
-        if result is not None:
-            self.result = result
-        if not hasattr(self, 'when') or (not isinstance(self.when, dict) and not callable(self.when)):
+        # Direct assignment and validation for better performance
+        self.when = when
+        self.result = result
+        # Use tuple type checks for single isinstance call
+        if not isinstance(self.when, (dict, type(lambda: None))):
             raise ValueError("Responder attr 'when' must be dict or function.")
-        if not hasattr(self, 'result') or (not isinstance(self.result, dict) and not callable(self.result)):
+        if not isinstance(self.result, (dict, type(lambda: None))):
             raise ValueError("Responder attr 'result' must be dict or function.")
 
     def match(self, query):
-        """ check, if this 'responder' can be used to answer or current request
+        """check, if this 'responder' can be used to answer or current request
 
         query (dict): request document
 
         return bool
         """
-        if isinstance(self.when, dict):
-            for key, value in self.when.items():
-                if key not in query:
+        w = self.when
+        if isinstance(w, dict):
+            q = query
+            for key, value in w.items():
+                try:
+                    q_val = q[key]
+                except KeyError:
                     return False
                 if callable(value):
-                    if not value(query[key]):
+                    if not value(q_val):
                         return False
-                elif value != query[key]:
+                elif value != q_val:
                     return False
             return True
         else:
-            return self.when(query)
+            return w(query)
 
     def handle(self, query, args, env, session):
-        """ making answer based on params:
+        """making answer based on params:
 
         query (dict): document(s) from request
         args (dict): all other significant information from request: flags, collection name, rows to return, etc
