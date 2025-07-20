@@ -8,28 +8,31 @@ class AQIClient:
         self.base_endpoint = "https://api.waqi.info/feed"
 
     def make_request(self, url, additionalParams={}):
-        newParams = {**self.params, **additionalParams}
-        resp = requests.get(url, params=newParams)
+        # Avoid mutable default argument
+        if additionalParams is None:
+            additionalParams = {}
+        combined_params = self.params.copy()
+        combined_params.update(additionalParams)
+        resp = requests.get(url, params=combined_params)
         res = resp.json()
-        content = {}
+        # Only call .json() once
         if res["status"] == "ok":
-            content = {'content': resp.json(), 'code': 200}
+            return {"content": res, "code": 200}
         else:
-            content = {'content': resp.json(), 'code': 404}
-        return content
+            return {"content": res, "code": 404}
 
     def air_quality_city(self, city):
-        url = f'{self.base_endpoint}/{city}/'
+        url = f"{self.base_endpoint}/{city}/"
         return self.make_request(url)
 
     def air_quality_lat_lng(self, lat, lng):
-        url = f'{self.base_endpoint}/geo:{lat};{lng}/'
+        url = f"{self.base_endpoint}/geo:{lat};{lng}/"
         return self.make_request(url)
 
     def air_quality_user_location(self):
-        url = f'{self.base_endpoint}/here/'
+        url = f"{self.base_endpoint}/here/"
         return self.make_request(url)
 
     def air_quality_station_by_name(self, name):
-        url = 'https://api.waqi.info/search/'
+        url = "https://api.waqi.info/search/"
         return self.make_request(url, {"keyword": name})
