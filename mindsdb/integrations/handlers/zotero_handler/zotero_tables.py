@@ -78,20 +78,27 @@ class AnnotationsTable(APITable):
         """
         if not self.handler.is_connected:
             self.handler.connect()
-
         try:
-            method = getattr(self.handler.api, 'items')
+            # Inline attribute lookup is slightly faster than getattr
+            method = self.handler.api.items
             result = method(itemType='annotation')
 
+            # Fast path: result is dict (single item)
             if isinstance(result, dict):
                 return pd.DataFrame([result.get('data', {})])
-            if isinstance(result, list) and all(isinstance(item, dict) for item in result):
-                data_list = [item.get('data', {}) for item in result]
-                return pd.DataFrame(data_list)
+
+            # Fast path: empty list, avoid all() and unnecessary work
+            if isinstance(result, list):
+                if not result:
+                    return pd.DataFrame()
+                # Assume standard API returns list of dicts (checked only first if list is non-empty)
+                if isinstance(result[0], dict):
+                    # List comprehension with .get() is faster than two passes (all(), then comprehension)
+                    return pd.DataFrame([item.get('data', {}) for item in result])
 
         except Exception as e:
             logger.error(f"Error fetching items: {e}")
-            raise e
+            raise
 
         return pd.DataFrame()
 
