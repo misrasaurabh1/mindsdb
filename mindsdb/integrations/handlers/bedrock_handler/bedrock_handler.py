@@ -20,10 +20,10 @@ class AmazonBedrockHandler(BaseMLEngine):
     """
 
     name = 'bedrock'
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.generative = True
+        self._bedrock_runtime_client = None  # Cache for the Bedrock client
 
     def create_engine(self, connection_args: Dict) -> None:
         """
@@ -252,14 +252,15 @@ class AmazonBedrockHandler(BaseMLEngine):
         Returns:
             List[Text]: The predictions made by the Amazon Bedrock API.
         """
+
         predictions = []
-        bedrock_runtime_client = create_amazon_bedrock_client(
-            'bedrock-runtime',
-            **self.engine_storage.get_connection_args()
-        )
+        bedrock_runtime_client = self._get_bedrock_runtime_client()
+
+        # NOTE: Avoid excessive attribute lookups and function calls inside loop
+        converse = bedrock_runtime_client.converse
 
         for prompt in prompts:
-            response = bedrock_runtime_client.converse(
+            response = converse(
                 modelId=model_id,
                 messages=[prompt],
                 inferenceConfig=inference_config
@@ -326,3 +327,14 @@ class AmazonBedrockHandler(BaseMLEngine):
         else:
             tables = ['args', 'metadata']
             return pd.DataFrame(tables, columns=['tables'])
+
+    def _get_bedrock_runtime_client(self):
+        """
+        Lazily create and cache the Bedrock Runtime client so it's not recreated on every predict call.
+        """
+        if self._bedrock_runtime_client is None:
+            self._bedrock_runtime_client = create_amazon_bedrock_client(
+                'bedrock-runtime',
+                **self.engine_storage.get_connection_args()
+            )
+        return self._bedrock_runtime_client
