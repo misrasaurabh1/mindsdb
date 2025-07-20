@@ -2,6 +2,7 @@ from mindsdb_sql_parser import ast
 
 from mindsdb.integrations.utilities.handlers.query_utilities.base_query_utilities import BaseQueryParser
 from mindsdb.integrations.utilities.handlers.query_utilities.base_query_utilities import BaseQueryExecutor
+from mindsdb.integrations.utilities.sql_utils import extract_comparison_conditions
 
 
 class DELETEQueryParser(BaseQueryParser):
@@ -13,6 +14,7 @@ class DELETEQueryParser(BaseQueryParser):
     query : ast.Delete
         Given SQL DELETE query.
     """
+
     def __init__(self, query: ast.Delete):
         super().__init__(query)
 
@@ -20,9 +22,10 @@ class DELETEQueryParser(BaseQueryParser):
         """
         Parses a SQL DELETE statement into its components: WHERE.
         """
-        where_conditions = self.parse_where_clause()
-
-        return where_conditions
+        if getattr(self.query, "where", None) is None:
+            return []
+        # Fast path: only invoke utility if WHERE clause exists
+        return extract_comparison_conditions(self.query.where)
 
 
 class DELETEQueryExecutor(BaseQueryExecutor):
