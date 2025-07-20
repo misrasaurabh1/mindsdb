@@ -18,6 +18,7 @@ from mindsdb.integrations.libs.response import INF_SCHEMA_COLUMNS_NAMES
 from mindsdb.api.mysql.mysql_proxy.libs.constants.mysql import MYSQL_DATA_TYPE
 from mindsdb.utilities.config import config
 from mindsdb.interfaces.data_catalog.data_catalog_reader import DataCatalogReader
+import functools
 
 logger = log.getLogger(__name__)
 
@@ -215,16 +216,23 @@ class SQLAgent:
         # Initialize the skill tool controller from MindsDB
         self.skill_tool = SkillToolController()
 
+        # --- Optimization: Add knowledge base names cache per instance
+        self._knowledge_base_names_cache = None
+
+        # --- Optimization: Add LRU cache for sql parsing
+        self._parse_sql = functools.lru_cache(maxsize=128)(parse_sql)
+
     def _call_engine(self, query: str, database=None):
-        # switch database
-        ast_query = parse_sql(query.strip("`"))
+        # --- Optimization: Use LRU cache for parse_sql
+        query_stripped = query
+        # Only strip if at least one backtick is present (avoid unnecessary string allocation)
+        if "`" in query:
+            query_stripped = query.strip("`")
+        ast_query = self._parse_sql(query_stripped)
         self._check_permissions(ast_query)
 
         if database is None:
-            # if we use tables with prefixes it should work for any database
             if self._databases is not None:
-                # if we have multiple databases, we need to check which one to use
-                # for now, we will just use the first one
                 database = self._databases[0] if self._databases else "mindsdb"
 
         ret = self._command_executor.execute_command(ast_query, database_name=database)
@@ -235,7 +243,8 @@ class SQLAgent:
         if not isinstance(ast_query, (Select, Show, Describe, Explain)):
             raise ValueError(f"Query is not allowed: {ast_query.to_string()}")
 
-        kb_names = self.get_all_knowledge_base_names()
+        # --- Optimization: use cached knowledge base names as a SET
+        kb_names_set = self._get_all_knowledge_base_names_cached()
 
         # Check tables
         if self._tables_to_include:
@@ -244,8 +253,7 @@ class SQLAgent:
                 if is_table and isinstance(node, Identifier):
                     table_name = ".".join(node.parts)
 
-                    # Check if this table is a knowledge base
-                    if table_name in kb_names or node.parts[-1] in kb_names:
+                    if table_name in kb_names_set or node.parts[-1] in kb_names_set:
                         # If it's a knowledge base and we have knowledge base restrictions
                         self.check_knowledge_base_permission(node)
                     else:
@@ -263,6 +271,7 @@ class SQLAgent:
                                     ...
                             raise origin_exc
 
+            # --- (no change) Traverse and invoke permission check.
             query_traversal(ast_query, _check_f)
 
     def check_knowledge_base_permission(self, node):
@@ -657,3 +666,16 @@ class SQLAgent:
             if "does not exist" in msg and " relation " in msg:
                 msg += "\nAvailable tables: " + ", ".join(self.get_usable_table_names())
             return msg
+
+    def _get_all_knowledge_base_names_cached(self):
+        # --- Optimization: Cache the result for this agent instance; refresh only if needed.
+        if self._knowledge_base_names_cache is None:
+            # Use the original method, ensure correct call
+            kb_names = self.get_all_knowledge_base_names()
+            # Convert to set for O(1) lookups
+            self._knowledge_base_names_cache = set(kb_names) if kb_names else set()
+        return self._knowledge_base_names_cache
+
+    def _clear_knowledge_base_names_cache(self):
+        """Clear the instance cache for knowledge base names."""
+        self._knowledge_base_names_cache = None
