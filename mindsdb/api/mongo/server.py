@@ -312,16 +312,18 @@ class MongoRequestHandler(SocketServer.BaseRequestHandler):
         return responder.to_bytes(response, request_id)
 
     def _read_bytes(self, length):
-        buffer = b''
-        while length:
-            chunk = self.request.recv(length)
-            if chunk == b'':
+        # Pre-allocate a list for chunks to avoid repeated bytes concatenation
+        chunks = []
+        remaining = length
+        while remaining:
+            chunk = self.request.recv(remaining)
+            if not chunk:  # chunk == b''
                 logger.debug('Connection closed')
                 return False
 
-            length -= len(chunk)
-            buffer += chunk
-        return buffer
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b''.join(chunks)
 
 
 class MongoServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
