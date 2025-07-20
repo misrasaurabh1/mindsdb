@@ -80,37 +80,37 @@ class EventbriteOrganizationTable(APITable):
         self.handler.connect()
 
         organization_info = self.handler.api.get_user_organizations()
-
-        # Normalize organization data
         organizations = organization_info.get("organizations", [])
-        result = pd.DataFrame(organizations)
 
         # filter targets
         columns = []
+        is_star = False
         for target in query.targets:
             if isinstance(target, ast.Star):
-                columns = []
+                is_star = True
                 break
             elif isinstance(target, ast.Identifier):
                 columns.append(target.parts[-1])
             else:
                 raise NotImplementedError
 
-        if len(columns) == 0:
+        if is_star or not columns:
             columns = self.get_columns()
 
-        # columns to lower case
-        columns = [name.lower() for name in columns]
+        # Make columns lowercase
+        columns = [col.lower() for col in columns]
 
-        if len(result) == 0:
-            result = pd.DataFrame([], columns=columns)
-        else:
-            # add absent columns
-            for col in set(columns) & set(result.columns) ^ set(columns):
-                result[col] = None
+        if not organizations:
+            return pd.DataFrame([], columns=columns)
 
-            # filter by columns
-            result = result[columns]
+        # Because the largest time was spent on DataFrame creation and mutation, 
+        # preprocess dicts to only contain requested columns and fill missing columns with None.
+        selected_records = (
+            {col: org.get(col, None) for col in columns}
+            for org in organizations
+        )
+        # This is very fast in pandas when all records are dicts with correct keys.
+        result = pd.DataFrame(selected_records, columns=columns)
 
         return result
 
