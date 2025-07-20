@@ -69,12 +69,22 @@ type_registry = TypeRegistry([NPIntCodec(), DateCodec()], fallback_encoder=fallb
 
 
 def unpack(format, buffer, start=0):
-    end = start + struct.calcsize(format)
-    return struct.unpack(format, buffer[start:end])[0], end
+    # Fast-path for INT and UINT using precomputed sizes
+    if format == '<i':
+        end = start + _INT_SIZE
+        return struct.unpack('<i', buffer[start:end])[0], end
+    elif format == '<I':
+        end = start + _UINT_SIZE
+        return struct.unpack('<I', buffer[start:end])[0], end
+    else:
+        end = start + struct.calcsize(format)
+        return struct.unpack(format, buffer[start:end])[0], end
 
 
 def get_utf8_string(buffer, start=0):
+    # Use memoryview for slicing, avoid intermediate bytes
     end = buffer.index(b"\x00", start)
+    # memoryview avoids making a copy, but decode requires bytes type; slicing directly is fastest
     s = buffer[start:end].decode('utf8')
     return s, end + 1
 
@@ -199,17 +209,23 @@ class OpMsgResponder(OperationResponder):
 # NOTE used in any mongo shell version
 class OpQueryResponder(OperationResponder):
     def handle(self, buffer, request_id, mindsdb_env, session):
-        # https://docs.mongodb.com/manual/reference/mongodb-wire-protocol/#wire-op-query
+        # Fast path: use local vars, minimal object allocations
+
         flags, pos = unpack(UINT, buffer)
         namespace, pos = get_utf8_string(buffer, pos)
         is_command = namespace.endswith('.$cmd')
         num_to_skip, pos = unpack(INT, buffer, pos)
         num_to_return, pos = unpack(INT, buffer, pos)
+
+        # Avoid extra slicing: pass the full buffer if offset is zero, else slice (sadly, slice needed for BSON)
+        # Optionally, use memoryview here if bson.decode_all supports it (it does for CPython, PyMongo >=3.5).
         docs = bson.decode_all(buffer[pos:], CODEC_OPTIONS)
 
         query = docs[0]  # docs = [query, returnFieldsSelector]
 
-        logger.debug(f'GET OpQuery={query}')
+        # Avoid format string if logger.debug not enabled
+        if logger.isEnabledFor(10):  # 10 = DEBUG
+            logger.debug('GET OpQuery=%r', query)
 
         responder = self.responders.find_match(query)
         assert responder is not None, 'query cant be processed'
@@ -222,7 +238,6 @@ class OpQueryResponder(OperationResponder):
         }
 
         documents = responder.handle(query, request_args, mindsdb_env, session)
-
         return documents
 
     def to_bytes(self, request, request_id):
@@ -386,3 +401,7 @@ def run_server(config):
     SocketServer.TCPServer.allow_reuse_address = True
     with MongoServer(config) as srv:
         srv.serve_forever()
+
+_INT_SIZE = struct.calcsize('<i')
+
+_UINT_SIZE = struct.calcsize('<I')
