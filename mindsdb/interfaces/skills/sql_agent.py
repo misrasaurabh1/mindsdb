@@ -194,22 +194,25 @@ class SQLAgent:
         self._databases = databases
         self._sample_rows_in_table_info = int(sample_rows_in_table_info)
 
+        # Coalesce None to empty list immediately to avoid repeated None checks
+        include_tables = include_tables or []
+        ignore_tables = ignore_tables or []
+        include_knowledge_bases = include_knowledge_bases or []
+        ignore_knowledge_bases = ignore_knowledge_bases or []
+
         self._tables_to_include = TablesCollection(include_tables)
         if self._tables_to_include:
-            # ignore_tables and include_tables should not be used together.
-            # include_tables takes priority if it's set.
             ignore_tables = []
         self._tables_to_ignore = TablesCollection(ignore_tables)
 
         self._knowledge_bases_to_include = TablesCollection(include_knowledge_bases, default_db=knowledge_base_database)
         if self._knowledge_bases_to_include:
-            # ignore_knowledge_bases and include_knowledge_bases should not be used together.
-            # include_knowledge_bases takes priority if it's set.
             ignore_knowledge_bases = []
         self._knowledge_bases_to_ignore = TablesCollection(ignore_knowledge_bases, default_db=knowledge_base_database)
 
         self._cache = cache
 
+        # Delayed import is kept for potential cold start performance.
         from mindsdb.interfaces.skills.skill_tool import SkillToolController
 
         # Initialize the skill tool controller from MindsDB
@@ -373,10 +376,8 @@ class SQLAgent:
             ast_query = Show(category="Knowledge Bases")
             result = self._command_executor.execute_command(ast_query, database_name=self.knowledge_base_database)
 
-            # Filter knowledge bases based on ignore list
-            kb_names = []
-            for row in result.data.records:
-                kb_names.append(row["NAME"])
+            # Optimize by using a list comprehension instead of appending in a loop
+            kb_names = [row["NAME"] for row in result.data.records]
 
             # if self._cache:
             #     self._cache.set(cache_key, set(kb_names))
