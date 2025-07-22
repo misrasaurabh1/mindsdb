@@ -3,16 +3,21 @@ from mindsdb.integrations.handlers.dockerhub_handler.dockerhub_tables import (
     DockerHubRepoImagesTable,
     DockerHubRepoTagTable,
     DockerHubRepoTagsTable,
-    DockerHubOrgSettingsTable
+    DockerHubOrgSettingsTable,
 )
 from mindsdb.integrations.handlers.dockerhub_handler.dockerhub import DockerHubClient
-from mindsdb.integrations.libs.api_handler import APIHandler
+from mindsdb.integrations.libs.api_handler import APIResource, APIHandler
 from mindsdb.integrations.libs.response import (
+    RESPONSE_TYPE,
+    HandlerResponse as Response,
     HandlerStatusResponse as StatusResponse,
 )
 
 from mindsdb.utilities import log
 from mindsdb_sql_parser import parse_sql
+import pandas as pd
+from functools import lru_cache
+from mindsdb_sql_parser.ast import ASTNode, Delete, Insert, Select, Star, Update
 
 logger = log.getLogger(__name__)
 
@@ -36,20 +41,12 @@ class DockerHubHandler(APIHandler):
         self.docker_client = DockerHubClient()
         self.is_connected = False
 
-        repo_images_stats_data = DockerHubRepoImagesSummaryTable(self)
-        self._register_table("repo_images_summary", repo_images_stats_data)
-
-        repo_images_data = DockerHubRepoImagesTable(self)
-        self._register_table("repo_images", repo_images_data)
-
-        repo_tag_details_data = DockerHubRepoTagTable(self)
-        self._register_table("repo_tag_details", repo_tag_details_data)
-
-        repo_tags_data = DockerHubRepoTagsTable(self)
-        self._register_table("repo_tags", repo_tags_data)
-
-        org_settings = DockerHubOrgSettingsTable(self)
-        self._register_table("org_settings", org_settings)
+        # Set up tables only once
+        self._register_table("repo_images_summary", DockerHubRepoImagesSummaryTable(self))
+        self._register_table("repo_images", DockerHubRepoImagesTable(self))
+        self._register_table("repo_tag_details", DockerHubRepoTagTable(self))
+        self._register_table("repo_tags", DockerHubRepoTagsTable(self))
+        self._register_table("org_settings", DockerHubOrgSettingsTable(self))
 
     def connect(self) -> StatusResponse:
         """Set up the connection required by the handler.
@@ -79,7 +76,9 @@ class DockerHubHandler(APIHandler):
         response = StatusResponse(False)
 
         try:
-            status = self.docker_client.login(self.connection_data.get("username"), self.connection_data.get("password"))
+            status = self.docker_client.login(
+                self.connection_data.get("username"), self.connection_data.get("password")
+            )
             if status["code"] == 200:
                 current_user = self.connection_data.get("username")
                 logger.info(f"Authenticated as user {current_user}")
@@ -108,5 +107,45 @@ class DockerHubHandler(APIHandler):
         StatusResponse
             Request status
         """
-        ast = parse_sql(query)
+        # Memoized parser for repeat queries, fallback to normal parse_sql if needed
+        ast = cached_parse_sql(query)
         return self.query(ast)
+
+    def query(self, query: ASTNode):
+        """
+        Process parsed query and dispatch to the appropriate table method.
+        """
+        # Direct attribute lookups
+        if isinstance(query, Select):
+            table_obj = self._get_table(query.from_table)
+            # Fast method member lookup
+            list_method = getattr(table_obj, "list", None)
+            if not list_method or (hasattr(list_method, "__func__") and list_method.__func__ is APIResource.list):
+                # Backwards compatibility: targets wasn't passed in previous version
+                query.targets = [Star()]
+            result = table_obj.select(query)
+        elif isinstance(query, Update):
+            table_obj = self._get_table(query.table)
+            result = table_obj.update(query)
+        elif isinstance(query, Insert):
+            table_obj = self._get_table(query.table)
+            result = table_obj.insert(query)
+        elif isinstance(query, Delete):
+            table_obj = self._get_table(query.table)
+            result = table_obj.delete(query)
+        else:
+            raise NotImplementedError
+
+        # Return proper response type
+        if result is None:
+            return Response(RESPONSE_TYPE.OK)
+        elif isinstance(result, pd.DataFrame):
+            return Response(RESPONSE_TYPE.TABLE, result)
+        else:
+            raise NotImplementedError
+
+
+# Memoize parse_sql for fast repeated queries; you can tune maxsize as needed.
+@lru_cache(maxsize=512)
+def cached_parse_sql(query: str):
+    return parse_sql(query)

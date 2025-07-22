@@ -18,6 +18,8 @@ from mindsdb.integrations.libs.api_handler_exceptions import TableAlreadyExists,
 
 from mindsdb.integrations.libs.response import HandlerResponse as Response, RESPONSE_TYPE
 from mindsdb.utilities import log
+from functools import lru_cache
+from mindsdb_sql_parser import parse_sql
 
 
 logger = log.getLogger("mindsdb")
@@ -663,3 +665,9 @@ class APIChatHandler(APIHandler):
             Dict
         """
         raise NotImplementedError()
+
+
+# Memoize parse_sql for fast repeated queries; you can tune maxsize as needed.
+@lru_cache(maxsize=512)
+def cached_parse_sql(query: str):
+    return parse_sql(query)
