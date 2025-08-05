@@ -18,7 +18,7 @@ from mindsdb.integrations.libs.llm.config import (
     MindsdbConfig,
     WriterConfig,
 )
-from mindsdb.utilities.config import config
+from mindsdb.utilities.config import Config
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 
@@ -108,134 +108,140 @@ def get_llm_config(provider: str, args: Dict) -> BaseLLMConfig:
 
     :return: LLMConfig object with the configuration for the provider.
     """
-    temperature = min(1.0, max(0.0, args.get("temperature", 0.0)))
+    # Use local variables for fast lookup
+    _args_get = args.get
+    _api_keys_get = args["api_keys"].get
+    temperature = min(1.0, max(0.0, _args_get("temperature", 0.0)))
+    model_name = _args_get("model_name")
+    # Use initial literal checks for performance when possible
     if provider == "openai":
-        if any(x in args.get("model_name", "") for x in ["o1", "o3"]):
-            # for o1 and 03, 'temperature' does not support 0.0 with this model. Only the default (1) value is supported
+        mname = _args_get("model_name", DEFAULT_OPENAI_MODEL)
+        if "o1" in mname or "o3" in mname:
             temperature = 1
-
         return OpenAIConfig(
-            model_name=args.get("model_name", DEFAULT_OPENAI_MODEL),
+            model_name=mname,
             temperature=temperature,
-            max_retries=args.get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
-            max_tokens=args.get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
-            openai_api_base=args.get("base_url", None),
-            openai_api_key=args["api_keys"].get("openai", None),
-            openai_organization=args.get("api_organization", None),
-            request_timeout=args.get("request_timeout", None),
+            max_retries=_args_get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
+            max_tokens=_args_get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
+            openai_api_base=_args_get("base_url", None),
+            openai_api_key=_api_keys_get("openai", None),
+            openai_organization=_args_get("api_organization", None),
+            request_timeout=_args_get("request_timeout", None),
         )
-    if provider == "anthropic":
+    elif provider == "anthropic":
         return AnthropicConfig(
-            model=args.get("model_name", DEFAULT_ANTHROPIC_MODEL),
+            model=_args_get("model_name", DEFAULT_ANTHROPIC_MODEL),
             temperature=temperature,
-            max_tokens=args.get("max_tokens", None),
-            top_p=args.get("top_p", None),
-            top_k=args.get("top_k", None),
-            default_request_timeout=args.get("default_request_timeout", None),
-            anthropic_api_key=args["api_keys"].get("anthropic", None),
-            anthropic_api_url=args.get("base_url", None),
+            max_tokens=_args_get("max_tokens", None),
+            top_p=_args_get("top_p", None),
+            top_k=_args_get("top_k", None),
+            default_request_timeout=_args_get("default_request_timeout", None),
+            anthropic_api_key=_api_keys_get("anthropic", None),
+            anthropic_api_url=_args_get("base_url", None),
         )
-    if provider == "anyscale":
+    elif provider == "anyscale":
         return AnyscaleConfig(
-            model_name=args.get("model_name", DEFAULT_ANYSCALE_MODEL),
+            model_name=_args_get("model_name", DEFAULT_ANYSCALE_MODEL),
             temperature=temperature,
-            max_retries=args.get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
-            max_tokens=args.get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
-            anyscale_api_base=args.get("base_url", DEFAULT_ANYSCALE_BASE_URL),
-            anyscale_api_key=args["api_keys"].get("anyscale", None),
-            anyscale_proxy=args.get("proxy", None),
-            request_timeout=args.get("request_timeout", None),
+            max_retries=_args_get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
+            max_tokens=_args_get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
+            anyscale_api_base=_args_get("base_url", DEFAULT_ANYSCALE_BASE_URL),
+            anyscale_api_key=_api_keys_get("anyscale", None),
+            anyscale_proxy=_args_get("proxy", None),
+            request_timeout=_args_get("request_timeout", None),
         )
-    if provider == "litellm":
+    elif provider == "litellm":
         model_kwargs = {
-            "api_key": args["api_keys"].get("litellm", None),
-            "top_p": args.get("top_p", None),
-            "request_timeout": args.get("request_timeout", None),
-            "frequency_penalty": args.get("frequency_penalty", None),
-            "presence_penalty": args.get("presence_penalty", None),
-            "logit_bias": args.get("logit_bias", None),
+            "api_key": _api_keys_get("litellm", None),
+            "top_p": _args_get("top_p", None),
+            "request_timeout": _args_get("request_timeout", None),
+            "frequency_penalty": _args_get("frequency_penalty", None),
+            "presence_penalty": _args_get("presence_penalty", None),
+            "logit_bias": _args_get("logit_bias", None),
         }
         return LiteLLMConfig(
-            model=args.get("model_name", DEFAULT_LITELLM_MODEL),
+            model=_args_get("model_name", DEFAULT_LITELLM_MODEL),
             temperature=temperature,
-            api_base=args.get("base_url", DEFAULT_LITELLM_BASE_URL),
-            max_retries=args.get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
-            max_tokens=args.get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
-            top_p=args.get("top_p", None),
-            top_k=args.get("top_k", None),
-            custom_llm_provider=args.get("custom_llm_provider", DEFAULT_LITELLM_PROVIDER),
+            api_base=_args_get("base_url", DEFAULT_LITELLM_BASE_URL),
+            max_retries=_args_get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
+            max_tokens=_args_get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
+            top_p=_args_get("top_p", None),
+            top_k=_args_get("top_k", None),
+            custom_llm_provider=_args_get("custom_llm_provider", DEFAULT_LITELLM_PROVIDER),
             model_kwargs=model_kwargs,
         )
-    if provider == "ollama":
+    elif provider == "ollama":
         return OllamaConfig(
-            base_url=args.get("base_url", DEFAULT_OLLAMA_BASE_URL),
-            model=args.get("model_name", DEFAULT_OLLAMA_MODEL),
+            base_url=_args_get("base_url", DEFAULT_OLLAMA_BASE_URL),
+            model=_args_get("model_name", DEFAULT_OLLAMA_MODEL),
             temperature=temperature,
-            top_p=args.get("top_p", None),
-            top_k=args.get("top_k", None),
-            timeout=args.get("request_timeout", None),
-            format=args.get("format", None),
-            headers=args.get("headers", None),
-            num_predict=args.get("num_predict", None),
-            num_ctx=args.get("num_ctx", None),
-            num_gpu=args.get("num_gpu", None),
-            repeat_penalty=args.get("repeat_penalty", None),
-            stop=args.get("stop", None),
-            template=args.get("template", None),
+            top_p=_args_get("top_p", None),
+            top_k=_args_get("top_k", None),
+            timeout=_args_get("request_timeout", None),
+            format=_args_get("format", None),
+            headers=_args_get("headers", None),
+            num_predict=_args_get("num_predict", None),
+            num_ctx=_args_get("num_ctx", None),
+            num_gpu=_args_get("num_gpu", None),
+            repeat_penalty=_args_get("repeat_penalty", None),
+            stop=_args_get("stop", None),
+            template=_args_get("template", None),
         )
-    if provider == "nvidia_nim":
+    elif provider == "nvidia_nim":
         return NvidiaNIMConfig(
-            base_url=args.get("base_url", DEFAULT_NVIDIA_NIM_BASE_URL),
-            model=args.get("model_name", DEFAULT_NVIDIA_NIM_MODEL),
+            base_url=_args_get("base_url", DEFAULT_NVIDIA_NIM_BASE_URL),
+            model=_args_get("model_name", DEFAULT_NVIDIA_NIM_MODEL),
             temperature=temperature,
-            top_p=args.get("top_p", None),
-            timeout=args.get("request_timeout", None),
-            format=args.get("format", None),
-            headers=args.get("headers", None),
-            num_predict=args.get("num_predict", None),
-            num_ctx=args.get("num_ctx", None),
-            num_gpu=args.get("num_gpu", None),
-            repeat_penalty=args.get("repeat_penalty", None),
-            stop=args.get("stop", None),
-            template=args.get("template", None),
-            nvidia_api_key=args["api_keys"].get("nvidia_nim", None),
+            top_p=_args_get("top_p", None),
+            timeout=_args_get("request_timeout", None),
+            format=_args_get("format", None),
+            headers=_args_get("headers", None),
+            num_predict=_args_get("num_predict", None),
+            num_ctx=_args_get("num_ctx", None),
+            num_gpu=_args_get("num_gpu", None),
+            repeat_penalty=_args_get("repeat_penalty", None),
+            stop=_args_get("stop", None),
+            template=_args_get("template", None),
+            nvidia_api_key=_api_keys_get("nvidia_nim", None),
         )
-    if provider == "mindsdb":
+    elif provider == "mindsdb":
+        # Config could be slow, use direct instance above
+        config = _get_config_instance()
         return MindsdbConfig(
             model_name=args["model_name"],
-            project_name=args.get("project_name", config.get("default_project")),
+            project_name=_args_get("project_name", config.get("default_project")),
         )
-    if provider == "vllm":
+    elif provider == "vllm":
         return OpenAIConfig(
-            model_name=args.get("model_name"),
+            model_name=_args_get("model_name"),
             temperature=temperature,
-            max_retries=args.get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
-            max_tokens=args.get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
-            openai_api_base=args.get("base_url", DEFAULT_VLLM_SERVER_URL),
-            openai_api_key=args["api_keys"].get("vllm", "EMPTY`"),
-            openai_organization=args.get("api_organization", None),
-            request_timeout=args.get("request_timeout", None),
+            max_retries=_args_get("max_retries", DEFAULT_OPENAI_MAX_RETRIES),
+            max_tokens=_args_get("max_tokens", DEFAULT_OPENAI_MAX_TOKENS),
+            openai_api_base=_args_get("base_url", DEFAULT_VLLM_SERVER_URL),
+            openai_api_key=_api_keys_get("vllm", "EMPTY"),
+            openai_organization=_args_get("api_organization", None),
+            request_timeout=_args_get("request_timeout", None),
         )
-    if provider == "google":
+    elif provider == "google":
         return GoogleConfig(
-            model=args.get("model_name", DEFAULT_GOOGLE_MODEL),
+            model=_args_get("model_name", DEFAULT_GOOGLE_MODEL),
             temperature=temperature,
-            top_p=args.get("top_p", None),
-            top_k=args.get("top_k", None),
-            max_output_tokens=args.get("max_tokens", None),
-            google_api_key=args["api_keys"].get("google", None),
+            top_p=_args_get("top_p", None),
+            top_k=_args_get("top_k", None),
+            max_output_tokens=_args_get("max_tokens", None),
+            google_api_key=_api_keys_get("google", None),
         )
-    if provider == "writer":
+    elif provider == "writer":
         return WriterConfig(
-            model_name=args.get("model_name", "palmyra-x5"),
+            model_name=_args_get("model_name", "palmyra-x5"),
             temperature=temperature,
-            max_tokens=args.get("max_tokens", None),
-            top_p=args.get("top_p", None),
-            stop=args.get("stop", None),
-            best_of=args.get("best_of", None),
-            writer_api_key=args["api_keys"].get("writer", None),
-            writer_org_id=args.get("writer_org_id", None),
-            base_url=args.get("base_url", None),
+            max_tokens=_args_get("max_tokens", None),
+            top_p=_args_get("top_p", None),
+            stop=_args_get("stop", None),
+            best_of=_args_get("best_of", None),
+            writer_api_key=_api_keys_get("writer", None),
+            writer_org_id=_args_get("writer_org_id", None),
+            base_url=_args_get("base_url", None),
         )
 
     raise ValueError(f"Provider {provider} is not supported.")
@@ -591,3 +597,27 @@ def ft_cqa_formatter(
         contents.extend([system, user, assistant])
 
     return pd.DataFrame({"role": roles, "content": contents})
+
+
+def _get_config_instance():
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance
+
+
+def _get_config_api_key(api_name):
+    # Get/cached config[api_name] lookup
+    key = api_name.lower()
+    if key in _config_api_keys:
+        return _config_api_keys[key]
+    config = _get_config_instance()
+    api_cfg = config.get(api_name, {})
+    api_key = api_cfg.get(f"{key}_api_key")
+    _config_api_keys[key] = api_key
+    return api_key
+
+
+_config_instance = None
+
+_config_api_keys = {}
